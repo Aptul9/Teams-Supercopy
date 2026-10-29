@@ -49,15 +49,60 @@ public static class TeamsCopyNative {
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     delegate bool EnumProc(IntPtr h, IntPtr l);
 
-    public static bool Register(int id, uint mod, uint vk) { return RegisterHotKey(IntPtr.Zero, id, mod | 0x4000, vk); }
+    // Shows a window as a topmost tool window without taking focus from Teams.
+    public static void ShowNoActivate(IntPtr h) {
+        SetWindowLong(h, -20, GetWindowLong(h, -20) | 0x08000000 | 0x00000080 | 0x00000008);
+        ShowWindow(h, 4);
+        SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+    }
 
-    // Blocks on the thread message queue until a registered hotkey fires; returns its id.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct WNDCLASS { public uint style; public IntPtr lpfnWndProc; public int cbClsExtra; public int cbWndExtra; public IntPtr hInstance; public IntPtr hIcon; public IntPtr hCursor; public IntPtr hbrBackground; public string lpszMenuName; public string lpszClassName; }
+    delegate IntPtr WndProc(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassW(ref WNDCLASS wc);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowExW(int ex, string cls, string name, int style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+    [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
+    [DllImport("user32.dll")] static extern IntPtr DispatchMessageW(ref MSG m);
+    [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandleW(IntPtr name);
+
+    // Hotkeys go to a hidden message-only window, not to the thread queue: COM calls
+    // (UI Automation, clipboard) and DoEvents pump messages, and a WM_HOTKEY posted
+    // to the thread with no window is dropped there. Sent to a window it reaches
+    // HotkeyProc whoever pumps, and waits in the queue until the listener is free.
+    static readonly Queue<int> pending = new Queue<int>();
+    static WndProc proc;
+    static IntPtr hotkeyWindow;
+    static IntPtr HotkeyProc(IntPtr h, uint msg, IntPtr w, IntPtr l) {
+        if (msg == 0x0312) { lock (pending) pending.Enqueue((int)w); return IntPtr.Zero; }
+        return DefWindowProcW(h, msg, w, l);
+    }
+    public static bool Register(int id, uint mod, uint vk) {
+        if (hotkeyWindow == IntPtr.Zero) {
+            proc = HotkeyProc;
+            var wc = new WNDCLASS { lpfnWndProc = Marshal.GetFunctionPointerForDelegate(proc), hInstance = GetModuleHandleW(IntPtr.Zero), lpszClassName = "TeamsSupercopyHotkeys" };
+            RegisterClassW(ref wc);
+            hotkeyWindow = CreateWindowExW(0, "TeamsSupercopyHotkeys", "", 0, 0, 0, 0, 0, new IntPtr(-3), IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+            if (hotkeyWindow == IntPtr.Zero) return false;
+        }
+        return RegisterHotKey(hotkeyWindow, id, mod | 0x4000, vk);
+    }
+
+    // Blocks until a hotkey press is queued; returns its id.
     public static int WaitHotkey() {
-        MSG m;
-        while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { if (m.message == 0x0312) return (int)m.wParam; }
-        return -1;
+        while (true) {
+            lock (pending) { if (pending.Count > 0) return pending.Dequeue(); }
+            MSG m;
+            if (GetMessage(out m, IntPtr.Zero, 0, 0) <= 0) return -1;
+            TranslateMessage(ref m);
+            DispatchMessageW(ref m);
+        }
     }
 
     public static void SendCtrlC() {
@@ -81,6 +126,7 @@ public static class TeamsCopyNative {
 '@
 
 $UIA = [System.Windows.Automation.AutomationElement]
+$script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
 
 function Get-TeamsWindow {
     $p = Get-Process ms-teams -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
@@ -269,15 +315,21 @@ function Get-ImageType([byte[]]$b) {
 # HTTP cache (blockfile format) under a key ending in objects/<objectId>/views/<view>.
 # Entries are 256-byte blocks in data_1: key_len at +32, data_size[4] at +40,
 # data_addr[4] at +56, key at +96; stream 1 is the body.
+$script:CacheDirs = $null
 function Get-CachedImage([string]$objectId) {
-    foreach ($dir in Get-Item (Join-Path $TeamsCache '*\Cache\Cache_Data') -ErrorAction SilentlyContinue) {
+    # resolving the wildcard costs ~150 ms, so the folders are looked up once
+    if (-not $script:CacheDirs) {
+        $script:CacheDirs = @(Get-Item (Join-Path $TeamsCache '*\Cache\Cache_Data') -ErrorAction SilentlyContinue |
+            Where-Object { [IO.File]::Exists((Join-Path $_.FullName 'data_1')) })
+    }
+    foreach ($dir in $script:CacheDirs) {
         $idx = Join-Path $dir.FullName 'data_1'
-        if (-not (Test-Path $idx)) { continue }
+        if (-not [IO.File]::Exists($idx)) { $script:CacheDirs = $null; continue }
         $d1 = Read-Shared $idx
         $s = [Text.Encoding]::ASCII.GetString($d1)
         $hits = @()
         $i = 0
-        while (($i = $s.IndexOf("objects/$objectId/views/", $i)) -ge 0) { $hits += $i; $i++ }
+        while (($i = $s.IndexOf("objects/$objectId/views/", $i, [StringComparison]::Ordinal)) -ge 0) { $hits += $i; $i++ }
         # original first, then the largest previews
         $hits = $hits | Sort-Object { $v = $s.Substring($_ + 18 + $objectId.Length, 20); if ($v -like 'imgo*') { 0 } elseif ($v -like 'imgpsh_fullsize*') { 1 } else { 2 } }
         foreach ($hit in $hits) {
@@ -291,10 +343,14 @@ function Get-CachedImage([string]$objectId) {
                 if ($type -eq 0) {
                     $b = Read-Shared (Join-Path $dir.FullName ('f_{0:x6}' -f ($addr -band 0x0FFFFFFF)))
                 } else {
+                    # block files run to several MB; read only the entry's bytes
                     $blockSize = @{ 2 = 256; 3 = 1024; 4 = 4096 }[[int]$type]
-                    $file = Read-Shared (Join-Path $dir.FullName ('data_{0}' -f (($addr -shr 16) -band 0xFF)))
-                    $off = 8192 + ($addr -band 0xFFFF) * $blockSize
-                    $b = [byte[]]::new($size); [Array]::Copy($file, $off, $b, 0, $size)
+                    $fs = [IO.File]::Open((Join-Path $dir.FullName ('data_{0}' -f (($addr -shr 16) -band 0xFF))), 'Open', 'Read', 'ReadWrite, Delete')
+                    try {
+                        [void]$fs.Seek(8192 + [long]($addr -band 0xFFFF) * $blockSize, 'Begin')
+                        $b = [byte[]]::new($size); $got = 0
+                        while ($got -lt $size) { $r = $fs.Read($b, $got, $size - $got); if ($r -le 0) { break }; $got += $r }
+                    } finally { $fs.Close() }
                 }
             } catch { continue }
             if ($b.Length -gt $size) { $b = $b[0..($size - 1)] }
@@ -379,7 +435,7 @@ function Format-Messages($msgs) {
         [void]$txt.AppendLine()
         [void]$html.Append('</p>')
     }
-    [pscustomobject]@{ Text = $txt.ToString().TrimEnd() + [Environment]::NewLine; Html = $html.ToString() }
+    [pscustomobject]@{ Text = $txt.ToString().TrimEnd() + [Environment]::NewLine; Html = $html.ToString(); Count = $msgs.Count; Images = $n }
 }
 
 function ConvertTo-CfHtml([string]$fragment) {
@@ -393,22 +449,59 @@ function ConvertTo-CfHtml([string]$fragment) {
     , $u.GetBytes(($pre -f $sh, $eh, $sf, $ef) + $head + $fragment + $tail)
 }
 
-function Out-Result($r) {
-    if (-not $r) { [System.Media.SystemSounds]::Asterisk.Play(); return }
-    if ($Stdout) { return $r.Text }
+function Write-Log([string]$line) {
+    Add-Content -Path (Join-Path $PSScriptRoot 'teams-supercopy.log') -Value ('{0:s} {1}' -f (Get-Date), $line)
+}
+
+# Small notice next to the mouse, so a copy that did not happen is visible
+# before the paste. It never takes focus.
+function Show-Notice([string]$text, [bool]$ok) {
+    if ($Stdout) { return }
+    $f = New-Object System.Windows.Forms.Form
+    $f.FormBorderStyle = 'None'; $f.ShowInTaskbar = $false; $f.StartPosition = 'Manual'; $f.TopMost = $true
+    $f.BackColor = if ($ok) { [System.Drawing.Color]::FromArgb(36, 36, 36) } else { [System.Drawing.Color]::FromArgb(150, 30, 30) }
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $text; $l.AutoSize = $true; $l.ForeColor = [System.Drawing.Color]::White
+    $l.Font = New-Object System.Drawing.Font('Segoe UI', 10); $l.Padding = New-Object System.Windows.Forms.Padding(10, 6, 10, 6)
+    $f.Controls.Add($l)
+    $f.AutoSize = $true; $f.AutoSizeMode = 'GrowAndShrink'
+    $p = [System.Windows.Forms.Cursor]::Position
+    $f.Location = New-Object System.Drawing.Point(($p.X + 16), ($p.Y + 16))
+    [TeamsCopyNative]::ShowNoActivate($f.Handle)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedMilliseconds -lt 1600) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 30 }
+    $f.Close(); $f.Dispose()
+}
+
+function Out-Result($r, [string]$mode) {
+    if (-not $r) {
+        Write-Log "$mode -> no matching message"
+        if ($Stdout) { return }
+        [System.Media.SystemSounds]::Asterisk.Play()
+        Show-Notice $(if ($mode -eq 'Hover') { 'Teams Supercopy: no message under the mouse' } else { 'Teams Supercopy: selection not matched, clipboard left as Teams copied it' }) $false
+        return
+    }
+    $what = '{0} message{1}' -f $r.Count, $(if ($r.Count -ne 1) { 's' })
+    if ($r.Images) { $what += ', {0} image{1}' -f $r.Images, $(if ($r.Images -ne 1) { 's' }) }
+    if ($Stdout) { Write-Log "$mode -> $what"; return $r.Text }
     $d = New-Object System.Windows.Forms.DataObject
     $d.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $r.Text)
     $d.SetData([System.Windows.Forms.DataFormats]::Html, (New-Object IO.MemoryStream (, (ConvertTo-CfHtml $r.Html))))
     [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)
+    Write-Log ('{0} -> {1} ({2} ms from hotkey to clipboard; {3})' -f $mode, $what, $script:HotkeyClock.ElapsedMilliseconds, ($script:Marks -join ', '))
+    Show-Notice "Teams Supercopy: $what copied" $true
 }
 
 function Invoke-Copy([string]$mode) {
     switch ($mode) {
-        'All' { Out-Result (Format-Messages (Get-TeamsMessages)) }
-        'Hover' { Out-Result (Format-Messages (Select-Hovered (Get-TeamsMessages))) }
+        'All' { Out-Result (Format-Messages (Get-TeamsMessages)) $mode }
+        'Hover' { Out-Result (Format-Messages (Select-Hovered (Get-TeamsMessages))) $mode }
         'Selection' {
             $clip = [System.Windows.Forms.Clipboard]::GetText()
-            Out-Result (Format-Messages (Select-ByClipboardText (Get-TeamsMessages) $clip))
+            $script:Marks += 'text read {0}' -f $script:HotkeyClock.ElapsedMilliseconds
+            $msgs = Get-TeamsMessages
+            $script:Marks += 'chat read {0}' -f $script:HotkeyClock.ElapsedMilliseconds
+            Out-Result (Format-Messages (Select-ByClipboardText $msgs $clip)) $mode
         }
     }
 }
@@ -440,20 +533,45 @@ $MOD_ALT = 1; $MOD_CTRL = 2; $MOD_SHIFT = 4; $VK_C = 0x43
 if (-not [TeamsCopyNative]::Register(1, $MOD_CTRL -bor $MOD_ALT, $VK_C)) { throw 'Ctrl+Alt+C is already registered by another program' }
 if (-not [TeamsCopyNative]::Register(2, $MOD_CTRL -bor $MOD_ALT -bor $MOD_SHIFT, $VK_C)) { throw 'Ctrl+Alt+Shift+C is already registered by another program' }
 
+# the first UI Automation read and formatting pass are about a second slower than
+# the following ones; do them once now so the first real copy is not the slow one
+try {
+    $warm = @(Get-TeamsMessages)
+    $null = Select-ByClipboardText $warm 'warm up'
+    $null = ConvertTo-CfHtml (Format-Messages ($warm | Select-Object -Last 1)).Html
+    $null = Get-CachedImage '0-weu-d00-00000000000000000000000000000000'
+    $null = New-Object System.Windows.Forms.DataObject
+    (New-Object System.Windows.Forms.Form).Dispose()
+} catch {}
+
 while ($true) {
     $hk = [TeamsCopyNative]::WaitHotkey()
     if ($hk -lt 0) { break }
+    $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
+    $script:Marks = @()
     try {
-        if (-not (Test-TeamsForeground)) { [System.Media.SystemSounds]::Asterisk.Play(); continue }
+        if (-not (Test-TeamsForeground)) {
+            Write-Log 'hotkey ignored: Teams is not the active window'
+            [System.Media.SystemSounds]::Asterisk.Play()
+            Show-Notice 'Teams Supercopy: click into Teams first, it is not the active window' $false
+            continue
+        }
         if ($hk -eq 2) { Invoke-Copy 'All'; continue }
-        if (-not (Wait-ModifiersUp)) { continue }
+        if (-not (Wait-ModifiersUp)) {
+            Write-Log 'hotkey ignored: keys held for more than 2 seconds'
+            Show-Notice 'Teams Supercopy: release the keys and press again' $false
+            continue
+        }
+        $script:Marks += 'keys up {0}' -f $script:HotkeyClock.ElapsedMilliseconds
         $seq = [TeamsCopyNative]::GetClipboardSequenceNumber()
         [TeamsCopyNative]::SendCtrlC()
         $deadline = (Get-Date).AddMilliseconds(400)
         while ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        $script:Marks += 'teams copy {0}' -f $script:HotkeyClock.ElapsedMilliseconds
         if ([TeamsCopyNative]::GetClipboardSequenceNumber() -ne $seq) { Invoke-Copy 'Selection' } else { Invoke-Copy 'Hover' }
     } catch {
+        Write-Log "error: $_"
         [System.Media.SystemSounds]::Hand.Play()
-        Add-Content -Path (Join-Path $PSScriptRoot 'teams-supercopy.log') -Value ("{0:s} {1}" -f (Get-Date), $_)
+        try { Show-Notice "Teams Supercopy: error, see teams-supercopy.log" $false } catch {}
     }
 }
