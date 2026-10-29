@@ -7,7 +7,8 @@ content-<id>, message-body-<id>; <id> is the message arrival time in epoch ms).
 Images are read from the Teams WebView2 HTTP cache. The clipboard gets plain text
 and HTML with the images embedded.
 
-Hotkeys (listener mode, the default):
+Listener mode, the default:
+  Ctrl+C in Teams   the copy is replaced with the full one when it matches messages
   Ctrl+Alt+C        selected messages, or the message under the mouse if nothing is selected
   Ctrl+Alt+Shift+C  every message loaded in the open chat
 
@@ -72,23 +73,30 @@ public static class TeamsCopyNative {
     [DllImport("user32.dll")] static extern IntPtr DispatchMessageW(ref MSG m);
     [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandleW(IntPtr name);
 
-    // Hotkeys go to a hidden message-only window, not to the thread queue: COM calls
+    // Hotkeys go to a hidden window, not to the thread queue: COM calls
     // (UI Automation, clipboard) and DoEvents pump messages, and a WM_HOTKEY posted
     // to the thread with no window is dropped there. Sent to a window it reaches
     // HotkeyProc whoever pumps, and waits in the queue until the listener is free.
     static readonly Queue<int> pending = new Queue<int>();
     static WndProc proc;
     static IntPtr hotkeyWindow;
+    [DllImport("user32.dll")] static extern bool AddClipboardFormatListener(IntPtr h);
+    public const int ClipboardChanged = 100;
     static IntPtr HotkeyProc(IntPtr h, uint msg, IntPtr w, IntPtr l) {
         if (msg == 0x0312) { lock (pending) pending.Enqueue((int)w); return IntPtr.Zero; }
+        if (msg == 0x031D) { lock (pending) pending.Enqueue(ClipboardChanged); return IntPtr.Zero; }
         return DefWindowProcW(h, msg, w, l);
     }
+    // WM_CLIPBOARDUPDATE arrives through the same queue as the hotkeys.
+    public static bool WatchClipboard() { return hotkeyWindow != IntPtr.Zero && AddClipboardFormatListener(hotkeyWindow); }
     public static bool Register(int id, uint mod, uint vk) {
         if (hotkeyWindow == IntPtr.Zero) {
             proc = HotkeyProc;
             var wc = new WNDCLASS { lpfnWndProc = Marshal.GetFunctionPointerForDelegate(proc), hInstance = GetModuleHandleW(IntPtr.Zero), lpszClassName = "TeamsSupercopyHotkeys" };
             RegisterClassW(ref wc);
-            hotkeyWindow = CreateWindowExW(0, "TeamsSupercopyHotkeys", "", 0, 0, 0, 0, 0, new IntPtr(-3), IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+            // a top-level window that is never shown: a message-only window (HWND_MESSAGE)
+            // gets the hotkeys but not WM_CLIPBOARDUPDATE
+            hotkeyWindow = CreateWindowExW(0x00000080, "TeamsSupercopyHotkeys", "", 0, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
             if (hotkeyWindow == IntPtr.Zero) return false;
         }
         return RegisterHotKey(hotkeyWindow, id, mod | 0x4000, vk);
@@ -476,7 +484,9 @@ function Show-Notice([string]$text, [bool]$ok) {
 function Out-Result($r, [string]$mode) {
     if (-not $r) {
         Write-Log "$mode -> no matching message"
-        if ($Stdout) { return }
+        # an automatic pass on a copy that is not messages (text from the compose box,
+        # a link, an image) leaves Teams' copy alone without complaining
+        if ($Stdout -or $mode -eq 'Auto') { return }
         [System.Media.SystemSounds]::Asterisk.Play()
         Show-Notice $(if ($mode -eq 'Hover') { 'Teams Supercopy: no message under the mouse' } else { 'Teams Supercopy: selection not matched, clipboard left as Teams copied it' }) $false
         return
@@ -496,7 +506,7 @@ function Invoke-Copy([string]$mode) {
     switch ($mode) {
         'All' { Out-Result (Format-Messages (Get-TeamsMessages)) $mode }
         'Hover' { Out-Result (Format-Messages (Select-Hovered (Get-TeamsMessages))) $mode }
-        'Selection' {
+        { $_ -in 'Selection', 'Auto' } {
             $clip = [System.Windows.Forms.Clipboard]::GetText()
             $script:Marks += 'text read {0}' -f $script:HotkeyClock.ElapsedMilliseconds
             $msgs = Get-TeamsMessages
@@ -504,6 +514,16 @@ function Invoke-Copy([string]$mode) {
             Out-Result (Format-Messages (Select-ByClipboardText $msgs $clip)) $mode
         }
     }
+}
+
+# A copy made inside Teams carries the page URL in a Chromium clipboard format;
+# the special copy written by this script does not, so it never re-triggers itself.
+function Test-TeamsClipboard {
+    try {
+        $u = [System.Windows.Forms.Clipboard]::GetData('Chromium internal source URL')
+        if ($u -is [IO.MemoryStream]) { $u = [Text.Encoding]::UTF8.GetString($u.ToArray()).Trim([char]0) }
+        "$u" -match '^https://teams\.(microsoft\.com|cloud\.microsoft|live\.com)/'
+    } catch { $false }
 }
 
 function Test-TeamsForeground {
@@ -532,6 +552,8 @@ if (-not $mutex.WaitOne(0)) { return }
 $MOD_ALT = 1; $MOD_CTRL = 2; $MOD_SHIFT = 4; $VK_C = 0x43
 if (-not [TeamsCopyNative]::Register(1, $MOD_CTRL -bor $MOD_ALT, $VK_C)) { throw 'Ctrl+Alt+C is already registered by another program' }
 if (-not [TeamsCopyNative]::Register(2, $MOD_CTRL -bor $MOD_ALT -bor $MOD_SHIFT, $VK_C)) { throw 'Ctrl+Alt+Shift+C is already registered by another program' }
+if (-not [TeamsCopyNative]::WatchClipboard()) { throw 'cannot listen to clipboard changes' }
+$script:LastClipSeq = [TeamsCopyNative]::GetClipboardSequenceNumber()
 
 # the first UI Automation read and formatting pass are about a second slower than
 # the following ones; do them once now so the first real copy is not the slow one
@@ -550,6 +572,14 @@ while ($true) {
     $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
     $script:Marks = @()
     try {
+        if ($hk -eq [TeamsCopyNative]::ClipboardChanged) {
+            # several updates can queue up for one copy; handle each clipboard state once
+            $seqNow = [TeamsCopyNative]::GetClipboardSequenceNumber()
+            if ($seqNow -eq $script:LastClipSeq) { continue }
+            $script:LastClipSeq = $seqNow
+            if (Test-TeamsClipboard) { Invoke-Copy 'Auto' }
+            continue
+        }
         if (-not (Test-TeamsForeground)) {
             Write-Log 'hotkey ignored: Teams is not the active window'
             [System.Media.SystemSounds]::Asterisk.Play()
@@ -562,13 +592,13 @@ while ($true) {
             Show-Notice 'Teams Supercopy: release the keys and press again' $false
             continue
         }
-        $script:Marks += 'keys up {0}' -f $script:HotkeyClock.ElapsedMilliseconds
         $seq = [TeamsCopyNative]::GetClipboardSequenceNumber()
         [TeamsCopyNative]::SendCtrlC()
         $deadline = (Get-Date).AddMilliseconds(400)
         while ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
-        $script:Marks += 'teams copy {0}' -f $script:HotkeyClock.ElapsedMilliseconds
-        if ([TeamsCopyNative]::GetClipboardSequenceNumber() -ne $seq) { Invoke-Copy 'Selection' } else { Invoke-Copy 'Hover' }
+        # with a selection, Teams' copy reaches the clipboard listener, which enriches it;
+        # without one the clipboard does not change and the hovered message is copied
+        if ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq) { Invoke-Copy 'Hover' }
     } catch {
         Write-Log "error: $_"
         [System.Media.SystemSounds]::Hand.Play()

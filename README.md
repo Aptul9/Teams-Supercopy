@@ -34,12 +34,17 @@ Two formats at once; the target app picks the one it understands:
 
 Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are deleted on the next copy.
 
-## Hotkeys
+## Keys
 
 | Keys | Copies |
 |---|---|
+| `Ctrl+C` (or right-click > Copy) in Teams | the selected messages, enriched automatically |
 | `Ctrl+Alt+C` | the selected messages; with nothing selected, the message under the mouse |
 | `Ctrl+Alt+Shift+C` | every message loaded in the open chat |
+
+The listener watches the clipboard. When a copy comes from Teams (Chromium tags it with the `https://teams.microsoft.com/...` source URL) and its text matches messages in the open chat, it replaces Teams' copy with the full one. A copy that matches no message, such as text from the compose box, a link or an image, is left untouched. Copies from any other app are ignored.
+
+Side effect: pasting inside Teams a message copied from Teams also pastes the full version, with header lines and quotes.
 
 After each press a small notice appears next to the mouse for about 1.5 seconds, without taking focus from Teams:
 
