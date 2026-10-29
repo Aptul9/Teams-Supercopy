@@ -41,7 +41,12 @@ Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are del
 | `Ctrl+Alt+C` | the selected messages; with nothing selected, the message under the mouse |
 | `Ctrl+Alt+Shift+C` | every message loaded in the open chat |
 
-The hotkeys act only when Teams is the foreground window. Anywhere else they play the Windows "asterisk" sound and do nothing.
+After each press a small notice appears next to the mouse for about 1.5 seconds, without taking focus from Teams:
+
+- dark: `Teams Supercopy: 2 messages, 1 image copied`
+- red: nothing was copied, with the reason. Teams is not the active window, no message under the mouse, or the selection did not match. In that last case the clipboard still holds Teams' own plain copy.
+
+Paste only after the dark notice: the special copy lands about a second after the key press, so a paste made sooner gets Teams' plain copy. Every press is logged to `teams-supercopy.log` next to the installed script.
 
 ## Requirements
 
@@ -149,5 +154,5 @@ Stops the listener, deletes the Startup shortcut and the installed folder.
 - A partially selected message is copied whole.
 - An image comes out at full size only if Teams has downloaded it, which happens when it is shown in the chat. An image that is neither in the cache nor on screen is reported as `[image N: not available]`.
 - Files, cards and GIF stickers are not extracted; only images posted in the message.
-- Paste behaviour checked on claude.ai in Chrome. Other apps may take only the plain text, in which case the images are reachable through the paths in the text.
+- Paste checked on claude.ai in Chrome (text plus image attachments) and Word (text with the images inline). Other apps may take only the plain text, in which case the images are reachable through the paths in the text.
 - The listener uses the mutex `Local\TeamsCopyHotkeys`: a second copy started while one is running exits silently.
