@@ -1,6 +1,6 @@
 # Teams Supercopy
 
-Copy Microsoft Teams messages with the sender, the time and the message being replied to, ready to paste into an AI chat.
+Copy Microsoft Teams messages with the sender, the time, the messages being replied to and the images, ready to paste into an AI chat.
 
 Teams' own copy keeps only the text. Teams Supercopy turns a selection into this:
 
@@ -10,10 +10,29 @@ Teams chat: Project Alpha
 [2026-10-29 09:14] Mario Rossi
 Can someone check the deploy logs?
 
+[2026-10-29 09:15] Mario Rossi
+[image 1: original, C:\Users\mario\AppData\Local\Temp\teams-supercopy\0-weu-d14-....jpg]
+this is the error
+
 [2026-10-29 09:16] Laura Bianchi
 > in reply to Mario Rossi (29/10/2026 09:14): Can someone check the deploy logs?
-On it, the pod is restarting because of the readiness probe.
+on it
+> in reply to Mario Rossi (29/10/2026 09:15): this is the error
+the pod is restarting because of the readiness probe
 ```
+
+A message that quotes several messages keeps each quote at its position in the text.
+
+## What lands on the clipboard
+
+Two formats at once; the target app picks the one it understands:
+
+| Format | Content | Pasted by |
+|---|---|---|
+| HTML | the text plus every image embedded | chat apps such as claude.ai: one paste gives the text and the images as attachments |
+| Plain text | the text, with each image as `[image N: <source>, <path>]` | terminals, editors, Claude Code: the path points to the image saved on disk |
+
+Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are deleted on the next copy.
 
 ## Hotkeys
 
@@ -116,7 +135,8 @@ Stops the listener, deletes the Startup shortcut and the installed folder.
 
 - Teams is a WebView2 app. Its UI Automation tree (the accessibility data used by screen readers) carries, for every message, `author-<id>`, `content-<id>` and `message-body-<id>`. These are only in the **raw** view of the tree, not in the default control view.
 - `<id>` is the message arrival time in epoch milliseconds, so the time is read from the id, independent of the UI language.
-- A reply shows up in `content-<id>` as `Inizio citazione, <author>, <date>, <text>, fine citazione <reply>` (Italian UI).
+- A quote shows up inside `content-<id>` as `Inizio citazione, <author>, <date>, <text>, fine citazione` (Italian UI), optionally followed by `, Questo messaggio citato non è verificato da Teams`. A message can hold several, anywhere in its text.
+- An image is an `Image` element under `content-<id>` whose AutomationId is `x_<objectId>` (for example `x_0-weu-d14-<32 hex>`). The tree has no pixels, but Teams downloads the image through its WebView2, so the full file is in the Chromium HTTP cache (`EBWebView\*\Cache\Cache_Data`, blockfile format) under the key `.../objects/<objectId>/views/imgo`. The script reads it from there: no network call, no token. If the entry is missing, it falls back to a screen capture of the thumbnail, marked `screen thumbnail` in the text.
 - On `Ctrl+Alt+C` the script waits for Ctrl, Alt and Shift to be released, then sends a plain `Ctrl+C`. Sending it with Shift still down would reach Teams as `Ctrl+Shift+C`, which starts an audio call.
 - The copied text is matched line by line, in order, against the messages in the tree. Matching lines rather than whole blocks works because Teams copies a quoted block as `Author` plus text without the date.
 - If the clipboard does not change (nothing selected), the message under the cursor is found by bounding rectangle. `AutomationElement.FromPoint` returns the whole message pane on WebView2, not the bubble.
@@ -127,4 +147,7 @@ Stops the listener, deletes the Startup shortcut and the installed folder.
 - Tested on the Italian Teams UI, Teams build `26260.1717`. The quote markers for other UI languages (`Begin quote` / `end quote` are in the pattern) are not verified. If quotes do not come out, dump the tree with `-Once All -Stdout` and adjust `$QuoteRx` in the script.
 - It depends on the current Teams DOM ids. A Teams update that renames them breaks it.
 - A partially selected message is copied whole.
+- An image comes out at full size only if Teams has downloaded it, which happens when it is shown in the chat. An image that is neither in the cache nor on screen is reported as `[image N: not available]`.
+- Files, cards and GIF stickers are not extracted; only images posted in the message.
+- Paste behaviour checked on claude.ai in Chrome. Other apps may take only the plain text, in which case the images are reachable through the paths in the text.
 - The listener uses the mutex `Local\TeamsCopyHotkeys`: a second copy started while one is running exits silently.
