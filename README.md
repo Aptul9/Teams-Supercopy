@@ -34,6 +34,8 @@ Two formats at once; the target app picks the one it understands:
 
 Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are deleted on the next copy.
 
+A local agent with filesystem access can open an image from its path while the file exists. Pasting that path into a web chat does not upload the image. Attach the saved file when the destination does not import the embedded HTML image.
+
 ## Keys
 
 | Keys | Copies |
@@ -47,6 +49,8 @@ Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are del
 The listener watches the clipboard. Automatic enrichment requires native Teams in the foreground, a clipboard owner belonging to that Teams process or its WebView2 child processes, HTML and a Teams source URL. Copies from browser tabs, including EverTranscript captions on Teams web, are ignored even when their text matches a native Teams chat. Plain-text-only copies are ignored. Holding Shift when the clipboard update arrives bypasses enrichment. `Ctrl+Shift+C` is handled only in native Teams and sends a plain `Ctrl+C` after the modifiers are released; other applications keep their shortcuts. Clipboard changes that arrive while enrichment runs are never overwritten by that pending result.
 
 Side effect: pasting inside Teams a message copied from Teams also pastes the full version, with header lines and quotes.
+
+Keep Shift held until the Copy action completes. `Ctrl+Shift+C` requires the listener to be running: without it, native Teams uses that shortcut to start an audio call. Supercopy leaves browser shortcuts unchanged.
 
 After each press a small notice appears next to the mouse for about 1.5 seconds, without taking focus from Teams:
 
@@ -129,6 +133,13 @@ pwsh -NoProfile -File "$env:LOCALAPPDATA\Programs\TeamsSupercopy\teams-supercopy
 ```
 
 The output must list the messages of the open chat with author and time. Then the real test: select a few messages in Teams, press `Ctrl+Alt+C`, paste.
+
+Check automatic enrichment and bypasses with the same selected message:
+
+1. Press `Ctrl+C` in native Teams. The pasted copy must include the chat header, author and timestamp.
+2. Press `Ctrl+Shift+C`, then release the keys. The pasted copy must remain the original selected text.
+3. Hold Shift while choosing Copy from the context menu. The pasted copy must remain the original selected text.
+4. Copy matching text from EverTranscript or another browser tab. Supercopy must leave that copy unchanged.
 
 One-shot modes, also usable from other tools or agents:
 
