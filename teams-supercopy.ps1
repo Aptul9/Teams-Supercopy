@@ -9,6 +9,7 @@ and HTML with the images embedded.
 
 Listener mode, the default:
   Ctrl+C in Teams   the copy is replaced with the full one when it matches messages
+  Ctrl+Shift+C      plain copy in native Teams; Shift + Copy also bypasses enrichment
   Ctrl+Alt+C        selected messages, or the message under the mouse if nothing is selected
   Ctrl+Alt+Shift+C  every message loaded in the open chat
 
@@ -45,6 +46,8 @@ public static class TeamsCopyNative {
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
     [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
@@ -81,11 +84,96 @@ public static class TeamsCopyNative {
     static WndProc proc;
     static IntPtr hotkeyWindow;
     [DllImport("user32.dll")] static extern bool AddClipboardFormatListener(IntPtr h);
+    [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct PROCESSENTRY32 { public uint size, usage, pid; public UIntPtr heap; public uint module, threads, parent; public int priority; public uint flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string name; }
+    [DllImport("kernel32.dll")] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    public static bool OwnerBelongsToWindow(IntPtr owner, IntPtr window) {
+        uint source, target;
+        GetWindowThreadProcessId(owner, out source); GetWindowThreadProcessId(window, out target);
+        if (source == 0 || target == 0) return false;
+        if (source == target) return true;
+        // WebView2 owns the clipboard through a hidden top-level window. Its
+        // process ancestry, rather than its window ancestry, leads back to Teams.
+        var snapshot = CreateToolhelp32Snapshot(2, 0);
+        if (snapshot == new IntPtr(-1)) return false;
+        try {
+            var parents = new Dictionary<uint, uint>();
+            var e = new PROCESSENTRY32 { size = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32)) };
+            if (Process32FirstW(snapshot, ref e)) do { parents[e.pid] = e.parent; } while (Process32NextW(snapshot, ref e));
+            for (int depth = 0; depth < 16 && parents.TryGetValue(source, out source); depth++) {
+                if (source == target) return true;
+                if (source == 0) break;
+            }
+            return false;
+        } finally { CloseHandle(snapshot); }
+    }
     public const int ClipboardChanged = 100;
+    public const int PlainCopy = 3;
+    public static uint EventSequence { get; private set; }
+    public static IntPtr EventForeground { get; private set; }
+    public static IntPtr EventOwnerRoot { get; private set; }
+    public static bool EventShift { get; private set; }
+    struct ClipboardEvent { public uint Sequence; public IntPtr Foreground; public IntPtr OwnerRoot; public bool Shift; }
+    static readonly Queue<ClipboardEvent> clipboardEvents = new Queue<ClipboardEvent>();
     static IntPtr HotkeyProc(IntPtr h, uint msg, IntPtr w, IntPtr l) {
         if (msg == 0x0312) { lock (pending) pending.Enqueue((int)w); return IntPtr.Zero; }
-        if (msg == 0x031D) { lock (pending) pending.Enqueue(ClipboardChanged); return IntPtr.Zero; }
+        if (msg == 0x031D) {
+            lock (pending) {
+                clipboardEvents.Enqueue(new ClipboardEvent { Sequence = GetClipboardSequenceNumber(), Foreground = GetForegroundWindow(), OwnerRoot = GetAncestor(GetClipboardOwner(), 2), Shift = (GetAsyncKeyState(0x10) & 0x8000) != 0 });
+                pending.Enqueue(ClipboardChanged);
+            }
+            return IntPtr.Zero;
+        }
         return DefWindowProcW(h, msg, w, l);
+    }
+    delegate IntPtr KeyboardProc(int code, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern IntPtr SetWindowsHookExW(int id, KeyboardProc callback, IntPtr module, uint thread);
+    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr w, IntPtr l);
+    static KeyboardProc keyboardProc;
+    static IntPtr keyboardHook;
+    static readonly System.Threading.ManualResetEvent hookReady = new System.Threading.ManualResetEvent(false);
+    static bool plainKeyDown;
+    static bool IsNativeTeamsForeground() {
+        uint pid;
+        GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        try { using (var p = System.Diagnostics.Process.GetProcessById((int)pid)) return p.ProcessName == "ms-teams"; }
+        catch { return false; }
+    }
+    static IntPtr OnKeyboard(int code, IntPtr w, IntPtr l) {
+        if (code >= 0 && Marshal.ReadInt32(l) == 0x43) {
+            int msg = (int)w;
+            if (plainKeyDown) {
+                if (msg == 0x101 || msg == 0x105) plainKeyDown = false;
+                return new IntPtr(1);
+            }
+            if ((msg == 0x100 || msg == 0x104) &&
+                (GetAsyncKeyState(0x11) & 0x8000) != 0 && (GetAsyncKeyState(0x10) & 0x8000) != 0 && (GetAsyncKeyState(0x12) & 0x8000) == 0 && IsNativeTeamsForeground()) {
+                plainKeyDown = true;
+                lock (pending) pending.Enqueue(PlainCopy);
+                // Low-level hooks run inside GetMessage without making it return.
+                PostMessageW(hotkeyWindow, 0x8001, IntPtr.Zero, IntPtr.Zero);
+                return new IntPtr(1);
+            }
+        }
+        return CallNextHookEx(keyboardHook, code, w, l);
+    }
+    public static bool WatchPlainCopy() {
+        // UI Automation and image reads must not stall the hook: Windows silently
+        // removes a low-level hook when its installing thread stops pumping.
+        var thread = new System.Threading.Thread(() => {
+            keyboardProc = OnKeyboard;
+            keyboardHook = SetWindowsHookExW(13, keyboardProc, GetModuleHandleW(IntPtr.Zero), 0);
+            hookReady.Set();
+            if (keyboardHook != IntPtr.Zero) { MSG m; while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) {} }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        hookReady.WaitOne();
+        return keyboardHook != IntPtr.Zero;
     }
     // WM_CLIPBOARDUPDATE arrives through the same queue as the hotkeys.
     public static bool WatchClipboard() { return hotkeyWindow != IntPtr.Zero && AddClipboardFormatListener(hotkeyWindow); }
@@ -105,7 +193,16 @@ public static class TeamsCopyNative {
     // Blocks until a hotkey press is queued; returns its id.
     public static int WaitHotkey() {
         while (true) {
-            lock (pending) { if (pending.Count > 0) return pending.Dequeue(); }
+            lock (pending) {
+                if (pending.Count > 0) {
+                    int id = pending.Dequeue();
+                    if (id == ClipboardChanged) {
+                        var e = clipboardEvents.Dequeue();
+                        EventSequence = e.Sequence; EventForeground = e.Foreground; EventOwnerRoot = e.OwnerRoot; EventShift = e.Shift;
+                    }
+                    return id;
+                }
+            }
             MSG m;
             if (GetMessage(out m, IntPtr.Zero, 0, 0) <= 0) return -1;
             TranslateMessage(ref m);
@@ -497,6 +594,10 @@ function Out-Result($r, [string]$mode) {
     $d = New-Object System.Windows.Forms.DataObject
     $d.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $r.Text)
     $d.SetData([System.Windows.Forms.DataFormats]::Html, (New-Object IO.MemoryStream (, (ConvertTo-CfHtml $r.Html))))
+    if ($mode -eq 'Auto' -and ($script:AutoSequence -ne [TeamsCopyNative]::GetClipboardSequenceNumber() -or -not (Test-TeamsForeground) -or [TeamsCopyNative]::GetAsyncKeyState(0x10) -band 0x8000)) {
+        Write-Log 'Auto skipped: clipboard, foreground or Shift changed'
+        return
+    }
     [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)
     Write-Log ('{0} -> {1} ({2} ms from hotkey to clipboard; {3})' -f $mode, $what, $script:HotkeyClock.ElapsedMilliseconds, ($script:Marks -join ', '))
     Show-Notice "Teams Supercopy: $what copied" $true
@@ -520,6 +621,14 @@ function Invoke-Copy([string]$mode) {
 # the special copy written by this script does not, so it never re-triggers itself.
 function Test-TeamsClipboard {
     try {
+        if (-not (Test-TeamsForeground)) { return $false }
+        $window = (Get-TeamsWindow).MainWindowHandle
+        if ([TeamsCopyNative]::EventForeground -ne $window -or -not [TeamsCopyNative]::OwnerBelongsToWindow([TeamsCopyNative]::EventOwnerRoot, $window)) {
+            Write-Log "Auto ignored: source window mismatch (foreground=$([TeamsCopyNative]::EventForeground), owner=$([TeamsCopyNative]::EventOwnerRoot), Teams=$window)"
+            return $false
+        }
+        # EverTranscript writes plain text. Only native rich message copies qualify.
+        if (-not [System.Windows.Forms.Clipboard]::ContainsData('HTML Format')) { return $false }
         $u = [System.Windows.Forms.Clipboard]::GetData('Chromium internal source URL')
         if ($u -is [IO.MemoryStream]) { $u = [Text.Encoding]::UTF8.GetString($u.ToArray()).Trim([char]0) }
         "$u" -match '^https://teams\.(microsoft\.com|cloud\.microsoft|live\.com)/'
@@ -532,11 +641,16 @@ function Test-TeamsForeground {
     (Get-Process -Id $pid_ -ErrorAction SilentlyContinue).ProcessName -eq 'ms-teams'
 }
 
+function Test-PlainCopyEvent([uint32]$sequence) {
+    $sequence -eq $script:PlainClipSeq -or [TeamsCopyNative]::EventShift -or ([TeamsCopyNative]::GetAsyncKeyState(0x10) -band 0x8000)
+}
+
 function Wait-ModifiersUp {
     # Ctrl, Alt, Shift: a synthetic Ctrl+C sent while Shift is still down would reach
     # Teams as Ctrl+Shift+C, which starts an audio call.
     $deadline = (Get-Date).AddSeconds(2)
     while ((Get-Date) -lt $deadline) {
+        [System.Windows.Forms.Application]::DoEvents()
         $down = (0x10, 0x11, 0x12) | Where-Object { [TeamsCopyNative]::GetAsyncKeyState($_) -band 0x8000 }
         if (-not $down) { return $true }
         Start-Sleep -Milliseconds 20
@@ -554,6 +668,7 @@ if (-not [TeamsCopyNative]::Register(1, $MOD_CTRL -bor $MOD_ALT, $VK_C)) { throw
 if (-not [TeamsCopyNative]::Register(2, $MOD_CTRL -bor $MOD_ALT -bor $MOD_SHIFT, $VK_C)) { throw 'Ctrl+Alt+Shift+C is already registered by another program' }
 if (-not [TeamsCopyNative]::WatchClipboard()) { throw 'cannot listen to clipboard changes' }
 $script:LastClipSeq = [TeamsCopyNative]::GetClipboardSequenceNumber()
+$script:PlainClipSeq = [uint32]0
 
 # the first UI Automation read and formatting pass are about a second slower than
 # the following ones; do them once now so the first real copy is not the slow one
@@ -566,6 +681,8 @@ try {
     (New-Object System.Windows.Forms.Form).Dispose()
 } catch {}
 
+if (-not [TeamsCopyNative]::WatchPlainCopy()) { throw 'cannot listen for plain-copy shortcut' }
+Write-Log "listener ready: native Teams scope, Shift bypass and Ctrl+Shift+C; pid=$PID"
 while ($true) {
     $hk = [TeamsCopyNative]::WaitHotkey()
     if ($hk -lt 0) { break }
@@ -575,8 +692,14 @@ while ($true) {
         if ($hk -eq [TeamsCopyNative]::ClipboardChanged) {
             # several updates can queue up for one copy; handle each clipboard state once
             $seqNow = [TeamsCopyNative]::GetClipboardSequenceNumber()
+            if ([TeamsCopyNative]::EventSequence -ne $seqNow) { continue }
             if ($seqNow -eq $script:LastClipSeq) { continue }
             $script:LastClipSeq = $seqNow
+            if (Test-PlainCopyEvent $seqNow) {
+                Write-Log 'Auto bypassed: plain copy'
+                continue
+            }
+            $script:AutoSequence = $seqNow
             if (Test-TeamsClipboard) { Invoke-Copy 'Auto' }
             continue
         }
@@ -584,6 +707,17 @@ while ($true) {
             Write-Log 'hotkey ignored: Teams is not the active window'
             [System.Media.SystemSounds]::Asterisk.Play()
             Show-Notice 'Teams Supercopy: click into Teams first, it is not the active window' $false
+            continue
+        }
+        if ($hk -eq [TeamsCopyNative]::PlainCopy) {
+            if (-not (Wait-ModifiersUp)) { Write-Log 'plain copy ignored: keys held for more than 2 seconds'; continue }
+            if (-not (Test-TeamsForeground)) { continue }
+            $seq = [TeamsCopyNative]::GetClipboardSequenceNumber()
+            [TeamsCopyNative]::SendCtrlC()
+            $deadline = (Get-Date).AddMilliseconds(800)
+            while ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 }
+            $script:PlainClipSeq = [TeamsCopyNative]::GetClipboardSequenceNumber()
+            Write-Log 'plain Ctrl+Shift+C copied without enrichment'
             continue
         }
         if ($hk -eq 2) { Invoke-Copy 'All'; continue }
@@ -595,7 +729,7 @@ while ($true) {
         $seq = [TeamsCopyNative]::GetClipboardSequenceNumber()
         [TeamsCopyNative]::SendCtrlC()
         $deadline = (Get-Date).AddMilliseconds(400)
-        while ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        while ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq -and (Get-Date) -lt $deadline) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 }
         # with a selection, Teams' copy reaches the clipboard listener, which enriches it;
         # without one the clipboard does not change and the hovered message is copied
         if ([TeamsCopyNative]::GetClipboardSequenceNumber() -eq $seq) { Invoke-Copy 'Hover' }
