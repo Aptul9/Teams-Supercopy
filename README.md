@@ -39,10 +39,12 @@ Images are saved to `%TEMP%\teams-supercopy\` and files older than a day are del
 | Keys | Copies |
 |---|---|
 | `Ctrl+C` (or right-click > Copy) in Teams | the selected messages, enriched automatically |
+| `Ctrl+Shift+C` in native Teams | the original copy, without enrichment; the Teams audio-call shortcut is suppressed |
+| Hold `Shift` while clicking Copy | the original copy, without enrichment |
 | `Ctrl+Alt+C` | the selected messages; with nothing selected, the message under the mouse |
 | `Ctrl+Alt+Shift+C` | every message loaded in the open chat |
 
-The listener watches the clipboard. When a copy comes from Teams (Chromium tags it with the `https://teams.microsoft.com/...` source URL) and its text matches messages in the open chat, it replaces Teams' copy with the full one. A copy that matches no message, such as text from the compose box, a link or an image, is left untouched. Copies from any other app are ignored.
+The listener watches the clipboard. Automatic enrichment requires native Teams in the foreground, a clipboard owner belonging to that Teams process or its WebView2 child processes, HTML and a Teams source URL. Copies from browser tabs, including EverTranscript captions on Teams web, are ignored even when their text matches a native Teams chat. Plain-text-only copies are ignored. Holding Shift when the clipboard update arrives bypasses enrichment. `Ctrl+Shift+C` is handled only in native Teams and sends a plain `Ctrl+C` after the modifiers are released; other applications keep their shortcuts. Clipboard changes that arrive while enrichment runs are never overwritten by that pending result.
 
 Side effect: pasting inside Teams a message copied from Teams also pastes the full version, with header lines and quotes.
 
@@ -107,6 +109,12 @@ Start-Process pwsh -ArgumentList '-NoProfile','-WindowStyle','Hidden','-File',"`
 ```
 
 ## Verify
+
+Clipboard regression checks (Windows, restores the original clipboard afterward):
+
+```powershell
+pwsh -NoProfile -STA -File tests/clipboard.Tests.ps1
+```
 
 Listener running:
 
