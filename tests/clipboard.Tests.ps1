@@ -71,6 +71,10 @@ try {
     $message = [pscustomobject]@{ Norm = 'shared phrase'; Chat = 'Fixture'; Author = 'Author'; Time = [datetime]'2026-11-03T12:00:00'; Parts = @([pscustomobject]@{ Kind = 'text'; Text = 'shared phrase' }) }
     $messages = @([pscustomobject]@{ Norm = 'earlier unrelated message' }, $message)
     Assert (@(Select-ByClipboardText $messages 'shared phrase').Count -eq 1) 'matching regression fixture resolves real message'
+    Assert ((Remove-LinkLabel 'run Link https://dev.example.com/x?id=1') -eq 'run https://dev.example.com/x?id=1') 'UIA link label stripped'
+    Assert ((Remove-LinkLabel 'see the link here') -eq 'see the link here') 'word link without url kept'
+    $linkMsg = [pscustomobject]@{ Norm = ConvertTo-Norm (Remove-LinkLabel 'please run Link https://dev.example.com/b?id=60619') }
+    Assert (@(Select-ByClipboardText @($linkMsg) 'please run https://dev.example.com/b?id=60619').Count -eq 1) 'message with link matches its copy'
     function Get-TeamsMessages { $messages }
     $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
     $script:Marks = @()

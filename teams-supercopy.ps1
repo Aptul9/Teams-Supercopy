@@ -250,6 +250,10 @@ function ConvertTo-Norm([string]$s) {
     (($s.ToLowerInvariant() -replace '[^\p{L}\p{N}]+', ' ').Trim())
 }
 
+# UIA names a hyperlink "Link <url>"; the clipboard has the bare url, so the label
+# is dropped or a message with a link never matches its own copy.
+function Remove-LinkLabel([string]$s) { $s -replace '(?i)\blink\s+(?=https?://)', '' }
+
 # A message can quote several messages anywhere in its text; each quote reads
 # "Inizio citazione, <author>, <date>, <text>, fine citazione", optionally followed by
 # the "not verified" notice Teams adds to quotes it cannot link back.
@@ -340,6 +344,7 @@ function Get-TeamsMessages {
         $m = $byId[$id]
         if (-not $m.Contains('message-body')) { continue }
         $content = if ($m.Contains('content')) { $m['content'] } else { '' }
+        $content = Remove-LinkLabel $content
 
         $author = $m['author']
         if (-not $author) {
@@ -385,7 +390,7 @@ function Select-ByClipboardText($messages, [string]$clip) {
         }
         if ($score -gt $bestScore) { $best = $hit; $bestScore = $score }
     }
-    if (-not $best) { return @() }
+    if ($bestScore -eq 0) { return @() }
     foreach ($k in $best) { $msgs[$k] }
 }
 
