@@ -1,0 +1,19 @@
+:root { color-scheme: light dark; font: 13px system-ui, sans-serif; }
+body { width: 320px; margin: 0; padding: 20px; color: #202030; background: #f8f8fc; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.logo { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: #5853b5; color: white; font-size: 24px; font-weight: 700; }
+h1 { font-size: 17px; margin: 0; }
+header p { color: #66667a; margin: 3px 0 0; }
+.toggle { display: flex; justify-content: space-between; align-items: center; font-weight: 600; padding: 12px; background: #eeeeF7; border-radius: 8px; }
+input { accent-color: #5853b5; width: 18px; height: 18px; }
+#status { color: #66667a; font-size: 12px; min-height: 18px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 12px 10px; padding: 12px 0; }
+dt { font: 11px ui-monospace, monospace; background: #eeeeF7; border-radius: 4px; padding: 4px 6px; align-self: start; }
+dd { margin: 0; padding-top: 2px; }
+footer { font-size: 11px; line-height: 1.6; color: #66667a; border-top: 1px solid #dddde9; padding-top: 12px; }
+@media (prefers-color-scheme: dark) {
+  body { color: #eeeeF7; background: #20202b; }
+  .toggle, dt { background: #303040; }
+  #status, header p, footer { color: #b1b1c4; }
+  footer { border-color: #3b3b4f; }
+}

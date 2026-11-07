@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Teams Supercopy",
+  "version": "1.0.0",
+  "description": "Copy Teams Web messages with author, timestamp, replies and embedded images.",
+  "permissions": ["storage", "clipboardWrite"],
+  "action": {
+    "default_title": "Teams Supercopy",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://teams.microsoft.com/*", "https://teams.cloud.microsoft/*"],
+      "js": ["supercopy.js", "content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

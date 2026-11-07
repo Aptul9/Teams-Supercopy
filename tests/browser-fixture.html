@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat | Supercopy Test | Local | Microsoft Teams</title>
+<style>
+  body { font: 16px system-ui; max-width: 780px; margin: 40px auto; background: #f5f5fa; color: #242435; }
+  article { background: white; border-radius: 10px; padding: 18px; margin: 12px 0; }
+  [id^="author-"] { font-weight: 600; color: #5853b5; }
+  blockquote { border-left: 3px solid #5853b5; margin: 10px 0; padding: 8px 12px; background: #f0effa; }
+  blockquote time { display: block; font-size: 12px; }
+  textarea, #paste-target { box-sizing: border-box; width: 100%; min-height: 80px; padding: 12px; background: white; border: 1px solid #bbb; }
+  img { width: 24px; height: 24px; image-rendering: pixelated; }
+</style>
+<body>
+  <h1>Supercopy browser test</h1>
+  <p>Synthetic messages. No Microsoft request or message is sent.</p>
+  <article id="message-body-1794042840000">
+    <div id="author-1794042840000"><span>Alice Example</span></div>
+    <div id="content-1794042840000"><p>Check the deployment logs.</p></div>
+  </article>
+  <article id="message-body-1794042900000">
+    <div id="author-1794042900000"><span>Bob Example</span></div>
+    <div id="content-1794042900000"><div data-message-object="quoted-reply" aria-label="Inizio citazione, Alice Example, 07/11/2026 09:14, Check the deployment logs., fine citazione"><div data-tid="quoted-reply-card"><span>Alice Example</span><span data-tid="quoted-reply-timestamp">07/11/2026 09:14</span><p data-tid="quoted-reply-preview-content">Check the deployment logs.</p></div></div><p>The pod restarted.</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=" alt="Test image"><p>See the screenshot.</p></div>
+  </article>
+  <p id="captions">Check the deployment logs.</p>
+  <label for="draft">Compose draft</label>
+  <textarea id="draft">A draft must stay unchanged.</textarea>
+  <h2>Paste target</h2>
+  <div id="paste-target" role="textbox" aria-label="Paste target" contenteditable="true"></div>
+</body>
+</html>
