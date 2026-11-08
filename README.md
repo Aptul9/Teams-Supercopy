@@ -1,5 +1,7 @@
 # Teams Supercopy
 
+<img src="assets/icon.png" alt="Teams Supercopy icon" width="96">
+
 Copy Microsoft Teams messages with the sender, the time, the messages being replied to and the images, ready to paste into an AI chat.
 
 Teams' own copy keeps only the text. Teams Supercopy turns a selection into this:
@@ -84,8 +86,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 `install.ps1`:
 
 1. stops a running Teams Supercopy listener, if any
-2. copies `teams-supercopy.ps1` to `%LOCALAPPDATA%\Programs\TeamsSupercopy\`
-3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), so the listener starts at every login
+2. copies `teams-supercopy.ps1` and `assets\icon.ico` to `%LOCALAPPDATA%\Programs\TeamsSupercopy\`
+3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), with that icon, so the listener starts at every login
 4. starts the listener now, hidden
 
 It prints the installed paths and whether the listener is running. Re-running it updates the installed copy.
@@ -103,6 +105,7 @@ $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
 $s.TargetPath = (Get-Command pwsh).Source
 $s.Arguments = "-NoProfile -WindowStyle Hidden -File `"$script`""
 $s.WindowStyle = 7
+$s.IconLocation = "$env:LOCALAPPDATA\Programs\TeamsSupercopy\icon.ico,0"   # optional, copy assets\icon.ico there first
 $s.Save()
 ```
 
