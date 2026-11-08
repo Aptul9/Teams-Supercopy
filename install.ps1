@@ -16,6 +16,7 @@ $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
 if (-not $pwsh) { throw 'PowerShell 7 (pwsh) is required: winget install Microsoft.PowerShell' }
 
 $script = Join-Path $InstallDir 'teams-supercopy.ps1'
+$icon = Join-Path $InstallDir 'icon.ico'
 
 # a running listener holds the hotkeys; stop it so the new copy can register them
 Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" |
@@ -25,6 +26,7 @@ Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" |
 New-Item -ItemType Directory -Force $InstallDir, $StartupDir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'teams-supercopy.ps1') $script -Force
 Unblock-File $script
+Copy-Item (Join-Path $PSScriptRoot 'assets\icon.ico') $icon -Force
 
 $args_ = '-NoProfile -WindowStyle Hidden -File "{0}"' -f $script
 $lnk = Join-Path $StartupDir 'Teams Supercopy.lnk'
@@ -34,6 +36,7 @@ $s.TargetPath = $pwsh
 $s.Arguments = $args_
 $s.WorkingDirectory = $InstallDir
 $s.WindowStyle = 7
+$s.IconLocation = "$icon,0"
 $s.Description = 'Teams Supercopy: Ctrl+Alt+C copies Teams messages with author, time and quote'
 $s.Save()
 
