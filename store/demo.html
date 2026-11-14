@@ -7,7 +7,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; font: 16px "Segoe UI", system-ui, sans-serif; color: #252537; background: #f6f6fb; }
   header { padding: 30px 54px; display: flex; align-items: center; gap: 16px; background: white; border-bottom: 1px solid #e5e4ef; }
-  .logo { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; color: white; background: #5853b5; font-size: 30px; font-weight: 700; }
+  .logo { display: block; width: 48px; height: 48px; }
   h1 { font-size: 24px; line-height: 1.2; margin: 0 0 5px; }
   header p { margin: 0; color: #65657b; }
   main { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; padding: 34px 54px; }
@@ -27,7 +27,7 @@
   kbd { display: inline-block; background: white; border: 1px solid #dcdbe7; border-radius: 5px; padding: 3px 7px; color: #45445d; font: 12px Consolas, monospace; }
 </style>
 <body>
-  <header><span class="logo">S</span><div><h1>Teams Supercopy</h1><p>Copy Teams messages with their context.</p></div></header>
+  <header><img class="logo" src="../browser-extension/icons/icon48.png" alt=""><div><h1>Teams Supercopy</h1><p>Copy Teams messages with their context.</p></div></header>
   <main>
     <section>
       <h2>Example conversation</h2>
