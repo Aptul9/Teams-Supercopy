@@ -61,7 +61,69 @@ After each press a small notice appears next to the mouse for about 1.5 seconds,
 
 Paste only after the dark notice: the special copy lands about a second after the key press, so a paste made sooner gets Teams' plain copy. Every press is logged to `teams-supercopy.log` next to the installed script.
 
-## Requirements
+## Browser extension
+
+The `browser-extension/` directory contains a standalone Manifest V3 extension for Chrome and Edge. The native Windows listener is not required. It runs only on `https://teams.microsoft.com/` and `https://teams.cloud.microsoft/`.
+
+Version 1.0.1 uses the app icon `assets/icon.png`. `pwsh -File tools/generate-icons.ps1` rebuilds `browser-extension/icons/` and `store/assets/Teams Supercopy Icon.png` from it; the 128 px icon keeps 96 px artwork with transparent padding, as the Chrome Web Store requires.
+
+### Load locally
+
+1. Open `chrome://extensions/` in Chrome, or `edge://extensions/` in Edge.
+2. Enable Developer mode.
+3. Choose **Load unpacked**, then select this repository's `browser-extension` directory.
+4. Reload the Teams Web tab. Open a chat and select message text.
+5. Press `Ctrl+C`, then paste after the Supercopy notice.
+
+The toolbar popup enables or pauses automatic enrichment. No build step is needed. Reload the extension and Teams tab after updating its source files.
+
+### Browser controls
+
+| Input | Result |
+|---|---|
+| `Ctrl+C`, browser Copy | Selected chat messages, including partially selected messages in full |
+| Teams message menu **Copy** / **Copia** | That message with context |
+| `Ctrl+Alt+C` | Selected messages, or the message under the mouse |
+| `Ctrl+Alt+Shift+C` | Every message currently rendered in the chat |
+| `Ctrl+Shift+C` with chat text selected | Original copy; Teams does not receive the call shortcut |
+| Hold Shift while choosing Copy | Original copy |
+
+Compose drafts, sidebar text and captions are excluded, even if they match a chat message. Other sites are unaffected. Shortcuts in editable fields are left unchanged. Browser shortcuts without a chat selection are also left unchanged.
+
+### Browser images
+
+HTML includes image bytes as data URLs. Plain text uses `[image N: loaded image, embedded in HTML]` instead of a Windows file path. The browser extension does not write image files to disk. A plain-text destination receives the image marker only.
+
+Image preparation starts when a message is hovered or selected. A first copy waits for missing image bytes. Images are fetched from their already-rendered source URL using the current Teams browser session, with a five-second timeout per image. A readable canvas image is the fallback. A failed image remains an explicit unavailable marker; the message text is still copied. This uses the loaded image, which can be a thumbnail, rather than claiming an original full-resolution image.
+
+Only PNG, JPEG, GIF and WebP images up to 12 MiB are embedded. Cache is memory-only and limited to 32 images. No clipboard-read permission, Graph API, tenant consent, separate backend or telemetry is used. Extension storage contains only the enabled flag.
+
+### Browser verification
+
+```powershell
+npm ci
+npm test
+```
+
+The suite covers DOM extraction, selection boundaries, ordered replies, images, ordinary copy events, Teams portal toolbars, Shift bypass and exclusions. `tests/browser-fixture.html` contains synthetic messages for installed-extension copy/paste checks.
+
+Chrome validation on 2026-11-07 through Playwriter:
+
+- Real Teams Web selection: two messages, one reply, 308 plain-text characters, with chat title, authors and timestamps.
+- Real Teams Web media: one message and one embedded GIF, `image/gif`, 35,434 decoded bytes in the Windows HTML clipboard format.
+- Installed-extension synthetic fixture: text and a PNG pasted into a local contenteditable target; pasted image loaded successfully.
+- `npm test`: 32 checks passed, including rejection of page-generated copy and shortcut events.
+
+### Browser limits
+
+- Only rendered chat messages are read. Scroll to load older messages. No full-history export.
+- Current selectors use Teams' `content-<epoch>`, `message-body-<epoch>` and `author-<epoch>` IDs. Teams updates can change them.
+- Teams channel layouts and localized menu labels other than English and Italian are not validated.
+- The extension cannot bypass image CORS or browser clipboard restrictions. Image failures are reported rather than silently replaced with expiring authenticated URLs.
+- Edge installation and real destination apps remain untested. Rich image import depends on the destination's paste behavior.
+- Teams' own Copy menu is covered by DOM tests only. Live menu activation was blocked by overlapping controls; ordinary selected-text copy was tested on real Teams.
+
+## Native Windows requirements
 
 - Windows 10 or 11
 - New Microsoft Teams (process `ms-teams.exe`). Classic Teams is not supported.

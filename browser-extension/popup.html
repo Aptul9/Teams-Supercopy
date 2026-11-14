@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teams Supercopy</title>
+<link rel="stylesheet" href="popup.css">
+<body>
+  <header><span class="logo">S</span><div><h1>Teams Supercopy</h1><p>Messages with context.</p></div></header>
+  <label class="toggle"><span>Automatic copy</span><input id="enabled" type="checkbox" checked></label>
+  <p id="status" role="status">Checking Teams tab...</p>
+  <dl>
+    <dt>Ctrl+C</dt><dd>Copy selected messages</dd>
+    <dt>Ctrl+Alt+C</dt><dd>Selection or hovered message</dd>
+    <dt>Ctrl+Alt+Shift+C</dt><dd>All loaded messages</dd>
+    <dt>Ctrl+Shift+C</dt><dd>Original copy, no enrichment</dd>
+  </dl>
+  <footer>Shift + Copy also bypasses enrichment. Only loaded chat messages are copied. No server, no telemetry.</footer>
+  <script src="popup.js"></script>
+</body>
+</html>
