@@ -65,6 +65,8 @@ Paste only after the dark notice: the special copy lands about a second after th
 
 The `browser-extension/` directory contains a standalone Manifest V3 extension for Chrome and Edge. The native Windows listener is not required. It runs only on `https://teams.microsoft.com/` and `https://teams.cloud.microsoft/`.
 
+Version 1.0.1 uses the app icon `assets/icon.png`. `pwsh -File tools/generate-icons.ps1` rebuilds `browser-extension/icons/` and `store/assets/Teams Supercopy Icon.png` from it; the 128 px icon keeps 96 px artwork with transparent padding, as the Chrome Web Store requires.
+
 ### Load locally
 
 1. Open `chrome://extensions/` in Chrome, or `edge://extensions/` in Edge.

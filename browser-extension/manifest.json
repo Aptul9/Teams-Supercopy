@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Teams Supercopy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Copy Teams Web messages with author, timestamp, replies and embedded images.",
   "permissions": ["storage", "clipboardWrite"],
   "icons": {
