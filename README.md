@@ -107,6 +107,17 @@ npm test
 
 The suite covers DOM extraction, selection boundaries, ordered replies, images, ordinary copy events, Teams portal toolbars, Shift bypass and exclusions. `tests/browser-fixture.html` contains synthetic messages for installed-extension copy/paste checks.
 
+### Chrome Web Store release
+
+`.github/workflows/chrome-web-store.yml` publishes the extension; nothing is uploaded by hand.
+
+- A pull request that touches the extension, the tests or the workflow runs `npm test` and builds `Teams Supercopy <version>.zip` from `browser-extension/` (plus `LICENSE` when the repository has one). Nothing is uploaded.
+- A push to `main` that touches `browser-extension/`, `tools/chrome-web-store.mjs` or the workflow builds the same ZIP and submits it for review through Chrome Web Store API V2, only when the manifest version is higher than every published or pending store version. An equal or lower version is reported as `published`, `in_review` or `not_newer` and nothing is sent.
+- While another version is in review the new one is `deferred`; the six-hourly scheduled run submits it once the review ends. No review is cancelled.
+- Google authentication is keyless: GitHub OIDC through Workload Identity Federation provider `github-cws/teams-supercopy`, restricted to this repository, `main` and this workflow. No key or refresh token is stored.
+- To release, raise `version` in `browser-extension/manifest.json` in the pull request. Repository variables: `CWS_ITEM_ID`, `CWS_PUBLISHER_ID`, `CWS_SERVICE_ACCOUNT`, `CWS_WORKLOAD_IDENTITY_PROVIDER`, `CWS_PUBLISH_ENABLED` (`true` enables submission).
+- Store listing text, icon and screenshots are not part of the API upload; they stay as set in the dashboard.
+
 Chrome validation on 2026-11-07 through Playwriter:
 
 - Real Teams Web selection: two messages, one reply, 308 plain-text characters, with chat title, authors and timestamps.

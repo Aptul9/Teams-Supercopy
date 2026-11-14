@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "node --test tests/browser.test.cjs"
+    "test": "node --test tests/browser.test.cjs tests/chrome-web-store.test.mjs"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"
