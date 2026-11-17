@@ -1,0 +1,123 @@
+name: Windows download
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'teams-supercopy.ps1'
+      - 'install.ps1'
+      - 'uninstall.ps1'
+      - 'assets/icon.ico'
+      - 'README.md'
+      - 'tests/clipboard.Tests.ps1'
+      - 'tools/package-windows.ps1'
+      - 'tools/test-windows-package.ps1'
+      - '.github/workflows/windows-download.yml'
+  pull_request:
+    paths:
+      - 'teams-supercopy.ps1'
+      - 'install.ps1'
+      - 'uninstall.ps1'
+      - 'assets/icon.ico'
+      - 'README.md'
+      - 'tests/clipboard.Tests.ps1'
+      - 'tools/package-windows.ps1'
+      - 'tools/test-windows-package.ps1'
+      - '.github/workflows/windows-download.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-download-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Test and package the native listener
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Clipboard tests
+        run: pwsh -NoProfile -STA -File tests/clipboard.Tests.ps1
+
+      - name: Build ZIP and JSON
+        run: ./tools/package-windows.ps1
+
+      - name: Install from the extracted ZIP
+        run: ./tools/test-windows-package.ps1 -Archive ./.release/windows/TeamsSupercopy-Windows.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: teams-supercopy-windows
+          path: |
+            .release/windows/TeamsSupercopy-Windows.zip
+            .release/windows/TeamsSupercopy-Windows.json
+            .release/windows/SHA256SUMS.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  servizi:
+    name: Publish on servizi.everbright.it
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # one upload at a time; a newer main waits instead of racing an older one
+    concurrency:
+      group: servizi-download-teams-supercopy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: teams-supercopy-windows
+          path: release
+
+      - name: Upload tested ZIP to the services page
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SSH_KEY: ${{ secrets.SERVIZI_DOWNLOAD_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVIZI_KNOWN_HOSTS }}
+          TARGET: servizi@${{ secrets.SERVIZI_HOST }}
+          BASE: https://servizi.everbright.it/download
+          NAME: TeamsSupercopy-Windows
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS.txt
+          hash=$(cut -d' ' -f1 SHA256SUMS.txt)
+          test "$(jq -r .sha256 "$NAME.json")" = "$hash"
+          test "$(jq -r .commit "$NAME.json")" = "$GITHUB_SHA"
+          test "$(jq -r .file "$NAME.json")" = "$NAME.zip"
+          # a run that finishes after a newer one must not put the older build back
+          published=$(curl -fsS --max-time 30 "$BASE/$NAME.json" | jq -r .commit || true)
+          if [ -n "$published" ] && [ "$published" != "null" ]; then
+            status=$(gh api "repos/$GH_REPO/compare/$published...$GITHUB_SHA" --jq .status)
+            if [ "$status" = "behind" ]; then
+              echo "Published $published is newer; services download left unchanged."
+              exit 0
+            fi
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # the key's forced command (ricevi-build) only accepts "<name>.zip|exe|json <sha256>" with the file on stdin
+          ssh "$TARGET" "$NAME.zip $hash" < "$NAME.zip"
+          test "$(curl -fsS --max-time 60 "$BASE/$NAME.zip" | sha256sum | cut -d' ' -f1)" = "$hash"
+          # the JSON the products page reads goes last, so it never names a ZIP that is not there yet
+          meta=$(sha256sum "$NAME.json" | cut -d' ' -f1)
+          ssh "$TARGET" "$NAME.json $meta" < "$NAME.json"
+          test "$(curl -fsS --max-time 30 "$BASE/$NAME.json" | sha256sum | cut -d' ' -f1)" = "$meta"
+          echo "$BASE/$NAME.zip $hash"
