@@ -46,7 +46,9 @@ if (-not $NoStart) {
 }
 
 $running = Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.CommandLine -match 'teams-supercopy\.ps1' }
+$version = [regex]::Match((Get-Content $script -Raw), "(?m)^\`$SupercopyVersion = '([^']+)'").Groups[1].Value
 [pscustomobject]@{
+    Version  = $version
     Script   = $script
     Shortcut = $lnk
     Running  = [bool]$running

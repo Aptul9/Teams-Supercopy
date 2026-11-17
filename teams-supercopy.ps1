@@ -25,6 +25,9 @@ param(
     [switch]$Stdout
 )
 
+# the one version of the native listener: the download package and its JSON read it from here
+$SupercopyVersion = '1.0.0'
+
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
 
@@ -687,7 +690,7 @@ try {
 } catch {}
 
 if (-not [TeamsCopyNative]::WatchPlainCopy()) { throw 'cannot listen for plain-copy shortcut' }
-Write-Log "listener ready: native Teams scope, Shift bypass and Ctrl+Shift+C; pid=$PID"
+Write-Log "listener ready v${SupercopyVersion}: native Teams scope, Shift bypass and Ctrl+Shift+C; pid=$PID"
 while ($true) {
     $hk = [TeamsCopyNative]::WaitHotkey()
     if ($hk -lt 0) { break }

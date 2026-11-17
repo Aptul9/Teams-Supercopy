@@ -148,7 +148,13 @@ No admin rights, no Graph API, no tenant consent: everything runs locally for th
 
 ## Install
 
-From a clone of this repository, in PowerShell 7:
+Download [TeamsSupercopy-Windows.zip](https://servizi.everbright.it/download/TeamsSupercopy-Windows.zip), also linked from the [products page](https://servizi.everbright.it/prodotti/) with its version. Extract it to any folder, then in PowerShell 7 from that folder:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The extracted folder is not needed afterwards. From a clone of this repository the same command works from the repository root:
 
 ```powershell
 git clone https://github.com/Aptul9/Teams-Supercopy.git
@@ -163,9 +169,27 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), with that icon, so the listener starts at every login
 4. starts the listener now, hidden
 
-It prints the installed paths and whether the listener is running. Re-running it updates the installed copy.
+It prints the installed version and paths and whether the listener is running. Re-running it, from a newer download or clone, updates the installed copy.
 
 Options: `-InstallDir <path>`, `-StartupDir <path>`, `-NoStart`.
+
+## Windows download release
+
+`.github/workflows/windows-download.yml` builds and publishes the ZIP; nothing is uploaded by hand.
+
+- The version is `$SupercopyVersion` in `teams-supercopy.ps1`, the only place it is written. The listener logs it at startup (`listener ready v1.0.0`). Raise it in the pull request that changes the listener.
+- A pull request or a push to `main` that touches the native files (`teams-supercopy.ps1`, `install.ps1`, `uninstall.ps1`, `assets/icon.ico`, `README.md`, `tests/clipboard.Tests.ps1`, the two `tools/*-windows*.ps1` scripts or the workflow) runs the clipboard tests on `windows-latest`, builds `TeamsSupercopy-Windows.zip` and `TeamsSupercopy-Windows.json` with `tools/package-windows.ps1`, then `tools/test-windows-package.ps1` extracts the ZIP, checks it against its manifest and JSON, installs it into temporary folders, starts the listener through the Startup shortcut and uninstalls it.
+- On a push to `main` only, the job `servizi` uploads the tested ZIP, then the JSON `{version, sha256, bytes, commit, file}`, to `https://servizi.everbright.it/download/` through the restricted SSH key of this repository. The products page reads the JSON for the link and the version line.
+- Repository secrets: `SERVIZI_HOST`, `SERVIZI_KNOWN_HOSTS`, `SERVIZI_DOWNLOAD_SSH_KEY`.
+- The Chrome extension release is separate and unaffected.
+
+Local build and test (the test refuses to run while a listener is running, since install and uninstall stop it):
+
+```powershell
+pwsh -NoProfile -STA -File tests/clipboard.Tests.ps1
+pwsh -NoProfile -File tools/package-windows.ps1 -OutputDirectory "$env:TEMP\supercopy-release"
+pwsh -NoProfile -File tools/test-windows-package.ps1 -Archive "$env:TEMP\supercopy-release\TeamsSupercopy-Windows.zip"
+```
 
 ## Start at login without the installer
 
