@@ -9,9 +9,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'teams-supercopy\.ps1' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+$listeners = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.CommandLine -match 'teams-supercopy\.ps1' })
+$listeners | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# a stopped listener keeps the install folder open (its working directory) until it has really exited
+if ($listeners) { Wait-Process -Id $listeners.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }
 
 Remove-Item (Join-Path $StartupDir 'Teams Supercopy.lnk') -ErrorAction SilentlyContinue
-if (Test-Path (Join-Path $InstallDir 'teams-supercopy.ps1')) { Remove-Item $InstallDir -Recurse -Force }
+if (Test-Path (Join-Path $InstallDir 'teams-supercopy.ps1')) {
+    for ($try = 1; ; $try++) {
+        try { Remove-Item $InstallDir -Recurse -Force; break }
+        catch { if ($try -ge 10) { throw }; Start-Sleep -Milliseconds 500 }
+    }
+}
