@@ -26,7 +26,7 @@ param(
 )
 
 # the one version of the native listener: the download package and its JSON read it from here
-$SupercopyVersion = '1.0.0'
+$SupercopyVersion = '1.0.1'
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
@@ -221,6 +221,26 @@ public static class TeamsCopyNative {
         SendInput(4, i, Marshal.SizeOf(typeof(INPUT)));
     }
 
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+    public static string WindowTitle(IntPtr h) { var s = new StringBuilder(512); GetWindowTextW(h, s, 512); return s.ToString(); }
+    // Teams has several top-level windows (main, pop-out chats, toasts); every
+    // visible TeamsWebView window of ms-teams can hold a chat.
+    public static bool IsTeamsWindow(IntPtr h) {
+        if (h == IntPtr.Zero || !IsWindowVisible(h)) return false;
+        var s = new StringBuilder(64); GetClassName(h, s, 64);
+        if (s.ToString() != "TeamsWebView") return false;
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        try { using (var p = System.Diagnostics.Process.GetProcessById((int)pid)) return p.ProcessName == "ms-teams"; }
+        catch { return false; }
+    }
+    // Visible Teams windows, topmost first.
+    public static List<IntPtr> TeamsWindows() {
+        var r = new List<IntPtr>();
+        EnumWindows((h, l) => { if (IsTeamsWindow(h)) r.Add(h); return true; }, IntPtr.Zero);
+        return r;
+    }
+
     public static List<IntPtr> RenderWindows(IntPtr top) {
         var r = new List<IntPtr>();
         EnumChildWindows(top, (h, l) => {
@@ -236,10 +256,18 @@ public static class TeamsCopyNative {
 $UIA = [System.Windows.Automation.AutomationElement]
 $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
 
+function Test-TeamsWindow([IntPtr]$h) { [TeamsCopyNative]::IsTeamsWindow($h) }
+
+# Process.MainWindowHandle picks any visible Teams window, a toast included, so the
+# window in front is used; from a terminal (-Once), the topmost chat window.
 function Get-TeamsWindow {
-    $p = Get-Process ms-teams -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if (-not $p) { throw 'Teams window not found' }
-    $p
+    $h = [TeamsCopyNative]::GetForegroundWindow()
+    if (-not (Test-TeamsWindow $h)) {
+        $all = @([TeamsCopyNative]::TeamsWindows())
+        $h = @($all | Where-Object { [TeamsCopyNative]::WindowTitle($_).Contains(' | ') }) + $all | Select-Object -First 1
+    }
+    if (-not $h) { throw 'Teams window not found' }
+    [pscustomobject]@{ Handle = $h; Title = [TeamsCopyNative]::WindowTitle($h) }
 }
 
 function Get-ChatTitle([string]$windowTitle) {
@@ -300,7 +328,7 @@ function Split-MessageParts([string]$content, $images) {
 
 # Reads every message currently rendered in the chat pane, in display order.
 function Get-TeamsMessages {
-    $proc = Get-TeamsWindow
+    $win = Get-TeamsWindow
     $cache = New-Object System.Windows.Automation.CacheRequest
     $cache.TreeFilter = [System.Windows.Automation.Automation]::RawViewCondition
     $cache.Add($UIA::AutomationIdProperty)
@@ -311,7 +339,7 @@ function Get-TeamsMessages {
     # the raw view is needed: author-<id> and chat-pane-list are not in the control view
     $scope = $cache.Activate()
     try {
-        foreach ($h in [TeamsCopyNative]::RenderWindows($proc.MainWindowHandle)) {
+        foreach ($h in [TeamsCopyNative]::RenderWindows($win.Handle)) {
             $list = $UIA::FromHandle($h).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $listCond)
             if ($list) { $nodes += @($list.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) }
         }
@@ -342,7 +370,7 @@ function Get-TeamsMessages {
         }
     }
 
-    $title = Get-ChatTitle $proc.MainWindowTitle
+    $title = Get-ChatTitle $win.Title
     foreach ($id in $byId.Keys) {
         $m = $byId[$id]
         if (-not $m.Contains('message-body')) { continue }
@@ -377,7 +405,7 @@ function Get-TeamsMessages {
 # so short lines like "ok" do not pull in a match from elsewhere in the chat. On a tie
 # the earliest start wins: a quoting message also contains the quoted text, and the
 # original is the one the selection started from.
-function Select-ByClipboardText($messages, [string]$clip) {
+function Select-ByClipboardText($messages, [string]$clip, [int]$clipImages = 0) {
     $lines = @($clip -split '\r?\n' | ForEach-Object { ConvertTo-Norm $_ } | Where-Object { $_.Length -ge 2 })
     if (-not $lines -or -not $messages) { return @() }
     $msgs = @($messages)
@@ -394,7 +422,20 @@ function Select-ByClipboardText($messages, [string]$clip) {
         if ($score -gt $bestScore) { $best = $hit; $bestScore = $score }
     }
     if ($bestScore -eq 0) { return @() }
-    foreach ($k in $best) { $msgs[$k] }
+    # a selection is contiguous: messages skipped between matched ones are kept. An
+    # image-only message has no text line on the clipboard (Teams puts its image only
+    # in the HTML), so the range grows by image-only neighbours while the copy holds
+    # images the range does not account for.
+    $lo = ($best | Measure-Object -Minimum).Minimum; $hi = ($best | Measure-Object -Maximum).Maximum
+    $missing = $clipImages - [int](@($msgs[$lo..$hi] | ForEach-Object { @($_.Parts | Where-Object Kind -eq 'image').Count }) | Measure-Object -Sum).Sum
+    while ($missing -gt 0 -and $hi + 1 -lt $msgs.Count -and (Test-ImageOnly $msgs[$hi + 1])) { $hi++; $missing -= @($msgs[$hi].Parts).Count }
+    while ($missing -gt 0 -and $lo -gt 0 -and (Test-ImageOnly $msgs[$lo - 1])) { $lo--; $missing -= @($msgs[$lo].Parts).Count }
+    $msgs[$lo..$hi]
+}
+
+function Test-ImageOnly($message) {
+    $parts = @($message.Parts)
+    $parts.Count -gt 0 -and -not ($parts | Where-Object Kind -ne 'image')
 }
 
 # UIA FromPoint on the Teams webview returns the whole message pane, not the bubble,
@@ -617,10 +658,12 @@ function Invoke-Copy([string]$mode) {
         'Hover' { Out-Result (Format-Messages (Select-Hovered (Get-TeamsMessages))) $mode }
         { $_ -in 'Selection', 'Auto' } {
             $clip = [System.Windows.Forms.Clipboard]::GetText()
+            $clipHtml = "$([System.Windows.Forms.Clipboard]::GetData('HTML Format'))"
+            $clipImages = ([regex]::Matches($clipHtml, 'itemtype="http://schema\.skype\.com/AMSImage"')).Count
             $script:Marks += 'text read {0}' -f $script:HotkeyClock.ElapsedMilliseconds
             $msgs = Get-TeamsMessages
             $script:Marks += 'chat read {0}' -f $script:HotkeyClock.ElapsedMilliseconds
-            Out-Result (Format-Messages (Select-ByClipboardText $msgs $clip)) $mode
+            Out-Result (Format-Messages (Select-ByClipboardText $msgs $clip $clipImages)) $mode
         }
     }
 }
@@ -630,9 +673,9 @@ function Invoke-Copy([string]$mode) {
 function Test-TeamsClipboard {
     try {
         if (-not (Test-TeamsForeground)) { return $false }
-        $window = (Get-TeamsWindow).MainWindowHandle
-        if ([TeamsCopyNative]::EventForeground -ne $window -or -not [TeamsCopyNative]::OwnerBelongsToWindow([TeamsCopyNative]::EventOwnerRoot, $window)) {
-            Write-Log "Auto ignored: source window mismatch (foreground=$([TeamsCopyNative]::EventForeground), owner=$([TeamsCopyNative]::EventOwnerRoot), Teams=$window)"
+        $window = [TeamsCopyNative]::EventForeground
+        if (-not (Test-TeamsWindow $window) -or -not [TeamsCopyNative]::OwnerBelongsToWindow([TeamsCopyNative]::EventOwnerRoot, $window)) {
+            Write-Log "Auto ignored: source window mismatch (foreground=$window, owner=$([TeamsCopyNative]::EventOwnerRoot))"
             return $false
         }
         # EverTranscript writes plain text. Only native rich message copies qualify.

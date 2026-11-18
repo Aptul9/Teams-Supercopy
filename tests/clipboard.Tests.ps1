@@ -40,9 +40,12 @@ try {
     $fixtureHandle = $fixtureWindow.Handle
     $script:Foreground = $true
     function Test-TeamsForeground { $script:Foreground }
-    function Get-TeamsWindow { [pscustomobject]@{ MainWindowHandle = $fixtureHandle } }
+    function Test-TeamsWindow { param($h) $h -eq $fixtureHandle -or $h -eq $popoutHandle }
+    $popoutWindow = [System.Windows.Forms.Form]::new()
+    $popoutHandle = $popoutWindow.Handle
     function Show-Notice { }
     function Write-Log { param($line) }
+    Assert (-not [TeamsCopyNative]::IsTeamsWindow($fixtureHandle)) 'window of another process is not a Teams window'
     Set-Event EventForeground $fixtureHandle
     Set-Event EventOwnerRoot $fixtureHandle
 
@@ -53,6 +56,9 @@ try {
     $script:Foreground = $true
     Set-Event EventForeground ([IntPtr]456)
     Assert (-not (Test-TeamsClipboard)) 'copy captured in another foreground window rejected'
+    Set-Event EventForeground $popoutHandle
+    Set-Event EventOwnerRoot $popoutHandle
+    Assert (Test-TeamsClipboard) 'copy from a second Teams window accepted'
     Set-Event EventForeground $fixtureHandle
     Set-Event EventOwnerRoot ([IntPtr]456)
     Assert (-not (Test-TeamsClipboard)) 'clipboard owned by another app rejected'
@@ -75,6 +81,14 @@ try {
     Assert ((Remove-LinkLabel 'see the link here') -eq 'see the link here') 'word link without url kept'
     $linkMsg = [pscustomobject]@{ Norm = ConvertTo-Norm (Remove-LinkLabel 'please run Link https://dev.example.com/b?id=60619') }
     Assert (@(Select-ByClipboardText @($linkMsg) 'please run https://dev.example.com/b?id=60619').Count -eq 1) 'message with link matches its copy'
+    $img = [pscustomobject]@{ Kind = 'image'; Image = $null }
+    $txt = { param($t) [pscustomobject]@{ Norm = $t; Parts = @([pscustomobject]@{ Kind = 'text'; Text = $t }) } }
+    $chat = @((& $txt 'alpha one'), (& $txt 'beta two'), [pscustomobject]@{ Norm = 'immagine'; Parts = @($img) }, (& $txt 'gamma three'))
+    Assert (@(Select-ByClipboardText $chat "beta two`r`n `r`n").Count -eq 1) 'image-only neighbour left out when the copy has no image'
+    $sel = @(Select-ByClipboardText $chat "beta two`r`n `r`n" 1)
+    Assert ($sel.Count -eq 2 -and $sel[1].Norm -eq 'immagine') 'image-only message after the selected text included when the copy has its image'
+    $sel = @(Select-ByClipboardText $chat "beta two`r`n `r`ngamma three")
+    Assert ($sel.Count -eq 3) 'message between two matched ones kept'
     function Get-TeamsMessages { $messages }
     $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
     $script:Marks = @()
@@ -103,6 +117,7 @@ try {
     Assert ([System.Windows.Forms.Clipboard]::GetText() -eq 'newer user copy') 'pending enrichment cancelled after foreground changes'
 } finally {
     if ($fixtureWindow) { $fixtureWindow.Dispose() }
+    if ($popoutWindow) { $popoutWindow.Dispose() }
     [System.Windows.Forms.Clipboard]::SetDataObject($saved, $true)
 }
 Write-Output "$script:Checks checks passed"
