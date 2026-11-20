@@ -26,7 +26,7 @@ param(
 )
 
 # the one version of the native listener: the download package and its JSON read it from here
-$SupercopyVersion = '1.0.2'
+$SupercopyVersion = '1.0.3'
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms

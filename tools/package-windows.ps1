@@ -1,4 +1,4 @@
-# Packs the native Windows listener into TeamsSupercopy-Windows.zip (install.ps1 installs from the extracted folder) and
+# Builds the tray host TeamsSupercopy.exe and packs it with the native Windows listener into TeamsSupercopy-Windows.zip (install.ps1 installs from the extracted folder) and
 # writes next to it TeamsSupercopy-Windows.json {version, sha256, bytes, commit, file}, the file the services products page reads.
 [CmdletBinding()]
 param([string]$OutputDirectory = (Join-Path (Split-Path $PSScriptRoot -Parent) '.release\windows'))
@@ -21,6 +21,12 @@ foreach ($file in $files) {
     New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
     Copy-Item (Join-Path $root $file) $target
 }
+# the tray host, built with the C# compiler of .NET Framework 4 that every Windows has
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$built = & $csc /nologo /target:winexe /optimize+ /r:System.Windows.Forms.dll /r:System.Drawing.dll `
+    "/win32icon:$(Join-Path $root 'assets\icon.ico')" "/out:$(Join-Path $stage 'TeamsSupercopy.exe')" (Join-Path $root 'tray\TeamsSupercopy.cs')
+if ($LASTEXITCODE -ne 0) { throw "tray build failed: $built" }
+$files += 'TeamsSupercopy.exe'
 $listed = @($files | Sort-Object | ForEach-Object {
     $path = Join-Path $stage $_
     [ordered]@{ path = $_; bytes = (Get-Item $path).Length; sha256 = (Get-FileHash $path).Hash.ToLowerInvariant() }
