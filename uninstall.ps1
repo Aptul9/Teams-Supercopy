@@ -1,5 +1,5 @@
 <#
-Stops the listener, removes the Startup shortcut and the installed script.
+Stops the tray app and the listener, removes the Startup shortcut and the installed files.
 #>
 [CmdletBinding()]
 param(
@@ -9,10 +9,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$listeners = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.CommandLine -match 'teams-supercopy\.ps1' })
-$listeners | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-# a stopped listener keeps the install folder open (its working directory) until it has really exited
-if ($listeners) { Wait-Process -Id $listeners.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }
+# the tray app first, or it restarts the listener
+$running = @(Get-Process TeamsSupercopy -ErrorAction SilentlyContinue) +
+    @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object { $_.CommandLine -match 'teams-supercopy\.ps1' } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+$running | Where-Object { $_ } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+# a stopped process keeps the install folder open (its working directory) until it has really exited
+if ($running) { Wait-Process -Id ($running | Where-Object { $_ }).Id -Timeout 10 -ErrorAction SilentlyContinue }
 
 Remove-Item (Join-Path $StartupDir 'Teams Supercopy.lnk') -ErrorAction SilentlyContinue
 if (Test-Path (Join-Path $InstallDir 'teams-supercopy.ps1')) {

@@ -164,10 +164,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 
 `install.ps1`:
 
-1. stops a running Teams Supercopy listener, if any
-2. copies `teams-supercopy.ps1` and `assets\icon.ico` to `%LOCALAPPDATA%\Programs\TeamsSupercopy\`
-3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), with that icon, so the listener starts at every login
-4. starts the listener now, hidden
+1. stops a running Teams Supercopy tray app and listener, if any
+2. copies `TeamsSupercopy.exe`, `teams-supercopy.ps1` and `assets\icon.ico` to `%LOCALAPPDATA%\Programs\TeamsSupercopy\`
+3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), pointing to `TeamsSupercopy.exe`, so it starts at every login
+4. starts `TeamsSupercopy.exe` now
+
+`TeamsSupercopy.exe` is a tray icon. It runs `teams-supercopy.ps1` through `pwsh` with no console window, starts it again if it stops (up to five times a minute), and ends it on exit. Its menu has Open log, Restart and Exit. No window to close by mistake: on Windows 11 Windows Terminal ignores `-WindowStyle Hidden`, so a listener started as `pwsh -WindowStyle Hidden` shows a terminal window and dies when that window is closed. The exe is built from `tray/TeamsSupercopy.cs` by `tools/package-windows.ps1` with the .NET Framework 4 `csc.exe` included in Windows; it is not in the repository.
 
 It prints the installed version and paths and whether the listener is running. Re-running it, from a newer download or clone, updates the installed copy.
 
@@ -178,7 +180,7 @@ Options: `-InstallDir <path>`, `-StartupDir <path>`, `-NoStart`.
 `.github/workflows/windows-download.yml` builds and publishes the ZIP; nothing is uploaded by hand.
 
 - The version is `$SupercopyVersion` in `teams-supercopy.ps1`, the only place it is written. The listener logs it at startup (`listener ready v1.0.0`). Raise it in the pull request that changes the listener.
-- A pull request or a push to `main` that touches the native files (`teams-supercopy.ps1`, `install.ps1`, `uninstall.ps1`, `assets/icon.ico`, `README.md`, `tests/clipboard.Tests.ps1`, the two `tools/*-windows*.ps1` scripts or the workflow) runs the clipboard tests on `windows-latest`, builds `TeamsSupercopy-Windows.zip` and `TeamsSupercopy-Windows.json` with `tools/package-windows.ps1`, then `tools/test-windows-package.ps1` extracts the ZIP, checks it against its manifest and JSON, installs it into temporary folders, starts the listener through the Startup shortcut and uninstalls it.
+- A pull request or a push to `main` that touches the native files (`teams-supercopy.ps1`, `tray/TeamsSupercopy.cs`, `install.ps1`, `uninstall.ps1`, `assets/icon.ico`, `README.md`, `tests/clipboard.Tests.ps1`, the two `tools/*-windows*.ps1` scripts or the workflow) runs the clipboard tests on `windows-latest`, builds `TeamsSupercopy-Windows.zip` and `TeamsSupercopy-Windows.json` with `tools/package-windows.ps1`, then `tools/test-windows-package.ps1` extracts the ZIP, checks it against its manifest and JSON, installs it into temporary folders, starts the tray app through the Startup shortcut, checks the listener has no console and is restarted after being killed, and uninstalls it.
 - On a push to `main` only, the job `servizi` uploads the tested ZIP, then the JSON `{version, sha256, bytes, commit, file}`, to `https://servizi.everbright.it/download/` through the restricted SSH key of this repository. The products page reads the JSON for the link and the version line.
 - Repository secrets: `SERVIZI_HOST`, `SERVIZI_KNOWN_HOSTS`, `SERVIZI_DOWNLOAD_SSH_KEY`.
 - The Chrome extension release is separate and unaffected.
@@ -193,23 +195,21 @@ pwsh -NoProfile -File tools/test-windows-package.ps1 -Archive "$env:TEMP\superco
 
 ## Start at login without the installer
 
-The listener is the script run with no arguments. To start it at login by hand, create the Startup shortcut:
+The listener is the script run with no arguments; `TeamsSupercopy.exe` runs the `teams-supercopy.ps1` in its own folder. To start it at login by hand, put both in one folder and create the Startup shortcut:
 
 ```powershell
-$script = "$env:LOCALAPPDATA\Programs\TeamsSupercopy\teams-supercopy.ps1"   # wherever the script is
+$exe = "$env:LOCALAPPDATA\Programs\TeamsSupercopy\TeamsSupercopy.exe"   # wherever the exe and script are
 $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Teams Supercopy.lnk'
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-$s.TargetPath = (Get-Command pwsh).Source
-$s.Arguments = "-NoProfile -WindowStyle Hidden -File `"$script`""
-$s.WindowStyle = 7
-$s.IconLocation = "$env:LOCALAPPDATA\Programs\TeamsSupercopy\icon.ico,0"   # optional, copy assets\icon.ico there first
+$s.TargetPath = $exe
+$s.WorkingDirectory = Split-Path $exe
 $s.Save()
 ```
 
 Start it now without logging out:
 
 ```powershell
-Start-Process pwsh -ArgumentList '-NoProfile','-WindowStyle','Hidden','-File',"`"$script`"" -WindowStyle Hidden
+Start-Process "$env:LOCALAPPDATA\Programs\TeamsSupercopy\TeamsSupercopy.exe"
 ```
 
 ## Verify
@@ -250,7 +250,7 @@ One-shot modes, also usable from other tools or agents:
 | `-Once Selection` | the messages matching the text already on the clipboard |
 | add `-Stdout` | print instead of writing the clipboard |
 
-Errors raised while handling a hotkey go to `teams-supercopy.log` next to the installed script, with a Windows "hand" error sound.
+Errors raised while handling a hotkey go to `teams-supercopy.log` next to the installed script, with a Windows "hand" error sound. When the listener stops, the reason goes there too (`listener stopped: ...`); the tray menu opens the log.
 
 ## Uninstall
 
@@ -258,7 +258,7 @@ Errors raised while handling a hotkey go to `teams-supercopy.log` next to the in
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
-Stops the listener, deletes the Startup shortcut and the installed folder.
+Stops the tray app and the listener, deletes the Startup shortcut and the installed folder.
 
 ## How it works
 
