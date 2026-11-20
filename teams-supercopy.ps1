@@ -26,7 +26,7 @@ param(
 )
 
 # the one version of the native listener: the download package and its JSON read it from here
-$SupercopyVersion = '1.0.1'
+$SupercopyVersion = '1.0.2'
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
@@ -207,7 +207,9 @@ public static class TeamsCopyNative {
                 }
             }
             MSG m;
-            if (GetMessage(out m, IntPtr.Zero, 0, 0) <= 0) return -1;
+            // -1: WM_QUIT, -2: GetMessage failed
+            int r = GetMessage(out m, IntPtr.Zero, 0, 0);
+            if (r <= 0) return r == 0 ? -1 : -2;
             TranslateMessage(ref m);
             DispatchMessageW(ref m);
         }
@@ -714,6 +716,9 @@ if ($Once) { Invoke-Copy $Once; return }
 $mutex = New-Object System.Threading.Mutex($false, 'Local\TeamsCopyHotkeys')
 if (-not $mutex.WaitOne(0)) { return }
 
+# the listener runs hidden: an error that ends it must reach the log
+trap { Write-Log "listener stopped: $_"; break }
+
 $MOD_ALT = 1; $MOD_CTRL = 2; $MOD_SHIFT = 4; $VK_C = 0x43
 if (-not [TeamsCopyNative]::Register(1, $MOD_CTRL -bor $MOD_ALT, $VK_C)) { throw 'Ctrl+Alt+C is already registered by another program' }
 if (-not [TeamsCopyNative]::Register(2, $MOD_CTRL -bor $MOD_ALT -bor $MOD_SHIFT, $VK_C)) { throw 'Ctrl+Alt+Shift+C is already registered by another program' }
@@ -736,7 +741,8 @@ if (-not [TeamsCopyNative]::WatchPlainCopy()) { throw 'cannot listen for plain-c
 Write-Log "listener ready v${SupercopyVersion}: native Teams scope, Shift bypass and Ctrl+Shift+C; pid=$PID"
 while ($true) {
     $hk = [TeamsCopyNative]::WaitHotkey()
-    if ($hk -lt 0) { break }
+    if ($hk -eq -1) { Write-Log 'listener stopped: WM_QUIT received'; break }
+    if ($hk -lt 0) { Write-Log 'listener stopped: GetMessage failed'; break }
     $script:HotkeyClock = [Diagnostics.Stopwatch]::StartNew()
     $script:Marks = @()
     try {
