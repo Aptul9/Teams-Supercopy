@@ -38,6 +38,8 @@ static class TeamsSupercopy
     static IntPtr job;
     static Process listener;
     static NotifyIcon tray;
+    static ContextMenuStrip menu;
+    static bool allowClose;
     static Control ui; // owns the UI thread for events raised on other threads
     static bool exiting;
     static DateTime[] recentStarts = new DateTime[5];
@@ -72,7 +74,14 @@ static class TeamsSupercopy
 
             ui = new Control();
             IntPtr uiHandle = ui.Handle;
-            ContextMenuStrip menu = new ContextMenuStrip();
+            // the menu opens with either mouse button and stays open, through item clicks and clicks
+            // elsewhere, until the icon is clicked again (or Esc, or Exit)
+            menu = new ContextMenuStrip();
+            menu.AutoClose = false;
+            menu.Closing += delegate(object sender, ToolStripDropDownClosingEventArgs e)
+            {
+                if (!allowClose && e.CloseReason != ToolStripDropDownCloseReason.Keyboard) e.Cancel = true;
+            };
             menu.Items.Add("Teams Supercopy " + version).Enabled = false;
             menu.Items.Add(new ToolStripSeparator());
             ToolStripMenuItem enabledItem = new ToolStripMenuItem("Enabled");
@@ -80,17 +89,22 @@ static class TeamsSupercopy
             enabledItem.Click += delegate { SetEnabled(!enabledItem.Checked); enabledItem.Checked = !IsDisabled(); };
             menu.Items.Add(enabledItem);
             ToolStripMenuItem startupItem = new ToolStripMenuItem("Start with Windows");
-            startupItem.Click += delegate { SetStartup(!File.Exists(StartupLink())); };
+            startupItem.Click += delegate { SetStartup(!File.Exists(StartupLink())); startupItem.Checked = File.Exists(StartupLink()); };
             menu.Items.Add(startupItem);
             menu.Opening += delegate { startupItem.Checked = File.Exists(StartupLink()); enabledItem.Checked = !IsDisabled(); };
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Open log", null, delegate { if (File.Exists(log)) Process.Start(log); });
             menu.Items.Add("Restart", null, delegate { startCount = 0; if (!IsDisabled()) Restart(); });
-            menu.Items.Add("Exit", null, delegate { exiting = true; Stop(); tray.Visible = false; Application.Exit(); });
+            menu.Items.Add("Exit", null, delegate { exiting = true; CloseMenu(); Stop(); tray.Visible = false; Application.Exit(); });
 
             tray = new NotifyIcon();
             tray.Icon = File.Exists(Path.Combine(dir, "icon.ico")) ? new Icon(Path.Combine(dir, "icon.ico")) : Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-            tray.ContextMenuStrip = menu;
+            tray.MouseUp += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left && e.Button != MouseButtons.Right) return;
+                if (menu.Visible) { CloseMenu(); return; }
+                menu.Show(Cursor.Position, ToolStripDropDownDirection.AboveLeft);
+            };
             UpdateText();
             tray.Visible = true;
 
@@ -151,6 +165,13 @@ static class TeamsSupercopy
     }
 
     static void Restart() { Stop(); Start(); }
+
+    static void CloseMenu()
+    {
+        allowClose = true;
+        menu.Close();
+        allowClose = false;
+    }
 
     // Enabled: stored per user, so a disabled Supercopy stays off after a restart or a login
     const string SettingsKey = @"Software\TeamsSupercopy";
