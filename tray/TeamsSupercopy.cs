@@ -5,6 +5,8 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Reflection;
+using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -73,17 +75,26 @@ static class TeamsSupercopy
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Items.Add("Teams Supercopy " + version).Enabled = false;
             menu.Items.Add(new ToolStripSeparator());
+            ToolStripMenuItem enabledItem = new ToolStripMenuItem("Enabled");
+            enabledItem.Checked = !IsDisabled();
+            enabledItem.Click += delegate { SetEnabled(!enabledItem.Checked); enabledItem.Checked = !IsDisabled(); };
+            menu.Items.Add(enabledItem);
+            ToolStripMenuItem startupItem = new ToolStripMenuItem("Start with Windows");
+            startupItem.Click += delegate { SetStartup(!File.Exists(StartupLink())); };
+            menu.Items.Add(startupItem);
+            menu.Opening += delegate { startupItem.Checked = File.Exists(StartupLink()); enabledItem.Checked = !IsDisabled(); };
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Open log", null, delegate { if (File.Exists(log)) Process.Start(log); });
-            menu.Items.Add("Restart", null, delegate { startCount = 0; Restart(); });
+            menu.Items.Add("Restart", null, delegate { startCount = 0; if (!IsDisabled()) Restart(); });
             menu.Items.Add("Exit", null, delegate { exiting = true; Stop(); tray.Visible = false; Application.Exit(); });
 
             tray = new NotifyIcon();
             tray.Icon = File.Exists(Path.Combine(dir, "icon.ico")) ? new Icon(Path.Combine(dir, "icon.ico")) : Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-            tray.Text = "Teams Supercopy " + version;
             tray.ContextMenuStrip = menu;
+            UpdateText();
             tray.Visible = true;
 
-            Start();
+            if (!IsDisabled()) Start();
             Application.Run();
             tray.Dispose();
         }
@@ -140,4 +151,53 @@ static class TeamsSupercopy
     }
 
     static void Restart() { Stop(); Start(); }
+
+    // Enabled: stored per user, so a disabled Supercopy stays off after a restart or a login
+    const string SettingsKey = @"Software\TeamsSupercopy";
+
+    static bool IsDisabled()
+    {
+        using (RegistryKey k = Registry.CurrentUser.OpenSubKey(SettingsKey))
+        {
+            return k != null && Convert.ToInt32(k.GetValue("Disabled", 0)) == 1;
+        }
+    }
+
+    static void SetEnabled(bool on)
+    {
+        using (RegistryKey k = Registry.CurrentUser.CreateSubKey(SettingsKey))
+        {
+            k.SetValue("Disabled", on ? 0 : 1, RegistryValueKind.DWord);
+        }
+        if (on) { startCount = 0; if (listener == null) Start(); }
+        else Stop();
+        UpdateText();
+    }
+
+    static void UpdateText()
+    {
+        tray.Text = "Teams Supercopy " + version + (IsDisabled() ? " (disabled)" : "");
+    }
+
+    // Start with Windows: the same Startup shortcut install.ps1 creates
+    static string StartupLink()
+    {
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Teams Supercopy.lnk");
+    }
+
+    static void SetStartup(bool on)
+    {
+        string lnk = StartupLink();
+        if (!on) { if (File.Exists(lnk)) File.Delete(lnk); return; }
+        Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+        object shell = Activator.CreateInstance(shellType);
+        object s = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+        Type t = s.GetType();
+        string icon = Path.Combine(dir, "icon.ico");
+        t.InvokeMember("TargetPath", BindingFlags.SetProperty, null, s, new object[] { Assembly.GetExecutingAssembly().Location });
+        t.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, s, new object[] { dir });
+        if (File.Exists(icon)) t.InvokeMember("IconLocation", BindingFlags.SetProperty, null, s, new object[] { icon + ",0" });
+        t.InvokeMember("Description", BindingFlags.SetProperty, null, s, new object[] { "Teams Supercopy: Ctrl+Alt+C copies Teams messages with author, time and quote" });
+        t.InvokeMember("Save", BindingFlags.InvokeMethod, null, s, null);
+    }
 }

@@ -17,6 +17,7 @@ $running | Where-Object { $_ } | ForEach-Object { Stop-Process -Id $_.Id -Force 
 if ($running) { Wait-Process -Id ($running | Where-Object { $_ }).Id -Timeout 10 -ErrorAction SilentlyContinue }
 
 Remove-Item (Join-Path $StartupDir 'Teams Supercopy.lnk') -ErrorAction SilentlyContinue
+Remove-Item 'HKCU:\Software\TeamsSupercopy' -ErrorAction SilentlyContinue
 if (Test-Path (Join-Path $InstallDir 'teams-supercopy.ps1')) {
     for ($try = 1; ; $try++) {
         try { Remove-Item $InstallDir -Recurse -Force; break }
