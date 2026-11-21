@@ -1,0 +1,153 @@
+name: Windows build and release
+
+# The Windows app lives in windows/ (one exe built with the .NET Framework 4 compiler of Windows). A pull request
+# builds and tests it; a push to main also publishes the portable ZIP and the installer as a GitHub release and on
+# https://servizi.everbright.it/download/, where the products page reads TeamsSupercopy-Windows-x64.json.
+on:
+  pull_request:
+    paths:
+      - 'windows/**'
+      - 'assets/icon.ico'
+      - 'assets/icon.png'
+      - '.github/workflows/windows.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - 'assets/icon.ico'
+      - 'assets/icon.png'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build, regressions, portable ZIP and installer
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build and run regressions
+        run: ./build.ps1 -Test
+      - name: Assemble portable ZIP
+        run: ./tools/package.ps1
+      - name: Test extracted ZIP
+        run: ./tools/test-package.ps1 -Archive ./artifacts/release/TeamsSupercopy-Windows-x64.zip
+      - name: Per-user installer from the tested ZIP
+        run: ./tools/installer.ps1
+      - name: Silent install, reinstall and uninstall
+        run: ./tools/test-installer.ps1 -Setup ./artifacts/release/TeamsSupercopy-Windows-x64-Setup.exe -OutputDir "$env:RUNNER_TEMP/installer-test"
+      - name: Retain tested download
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-x64
+          path: |
+            windows/artifacts/release/TeamsSupercopy-Windows-x64.zip
+            windows/artifacts/release/TeamsSupercopy-Windows-x64-Setup.exe
+            windows/artifacts/release/TeamsSupercopy-Windows-x64.json
+            windows/artifacts/release/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub download
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: windows-x64
+          path: release
+      - name: Publish tested ZIP, installer and checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS.txt
+          test "$(jq -r .commit TeamsSupercopy-Windows-x64.json)" = "$GITHUB_SHA"
+          current=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo "Superseded main commit; retained as workflow artifact only."
+            exit 0
+          fi
+          version=$(jq -r .version TeamsSupercopy-Windows-x64.json)
+          # windows- prefix: the repository also holds the Chrome extension, whose versions are not Windows versions
+          tag="windows-v${version}-build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" TeamsSupercopy-Windows-x64.zip TeamsSupercopy-Windows-x64-Setup.exe SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "Teams Supercopy Windows ${version} (build ${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT})" --notes "" --latest
+
+  servizi:
+    name: Publish on servizi.everbright.it
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # one upload at a time; a newer main waits instead of racing an older one
+    concurrency:
+      group: servizi-download-teams-supercopy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: windows-x64
+          path: release
+      - name: Upload tested ZIP and installer to the services page
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SSH_KEY: ${{ secrets.SERVIZI_DOWNLOAD_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVIZI_KNOWN_HOSTS }}
+          TARGET: servizi@${{ secrets.SERVIZI_HOST }}
+          BASE: https://servizi.everbright.it/download
+          NAME: TeamsSupercopy-Windows-x64
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check SHA256SUMS.txt
+          test "$(jq -r .commit "$NAME.json")" = "$GITHUB_SHA"
+          current=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            echo "Superseded main commit; services download left unchanged."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          hash=$(sha256sum "$NAME.zip" | cut -d' ' -f1)
+          setup=$(sha256sum "$NAME-Setup.exe" | cut -d' ' -f1)
+          test "$(jq -r .sha256 "$NAME.json")" = "$hash"
+          test "$(jq -r .file "$NAME.json")" = "$NAME.zip"
+          test "$(jq -r .setup.sha256 "$NAME.json")" = "$setup"
+          test "$(jq -r .setup.file "$NAME.json")" = "$NAME-Setup.exe"
+          # the key's forced command (ricevi-build) only accepts "<name>.zip|exe|json <sha256>" with the file on stdin
+          ssh "$TARGET" "$NAME.zip $hash" < "$NAME.zip"
+          test "$(curl -fsS --max-time 60 "$BASE/$NAME.zip" | sha256sum | cut -d' ' -f1)" = "$hash"
+          ssh "$TARGET" "$NAME-Setup.exe $setup" < "$NAME-Setup.exe"
+          test "$(curl -fsS --max-time 60 "$BASE/$NAME-Setup.exe" | sha256sum | cut -d' ' -f1)" = "$setup"
+          # the JSON the products page reads goes last, so it never names a ZIP or installer that is not there yet
+          meta=$(sha256sum "$NAME.json" | cut -d' ' -f1)
+          ssh "$TARGET" "$NAME.json $meta" < "$NAME.json"
+          test "$(curl -fsS --max-time 30 "$BASE/$NAME.json" | sha256sum | cut -d' ' -f1)" = "$meta"
+          echo "$BASE/$NAME.zip $hash"
+          echo "$BASE/$NAME-Setup.exe $setup"
