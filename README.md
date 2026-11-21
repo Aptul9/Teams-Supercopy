@@ -59,7 +59,7 @@ After each press a small notice appears next to the mouse for about 1.5 seconds,
 - dark: `Teams Supercopy: 2 messages, 1 image copied`
 - red: nothing was copied, with the reason. Teams is not the active window, no message under the mouse, or the selection did not match. In that last case the clipboard still holds Teams' own plain copy.
 
-Paste only after the dark notice: the special copy lands about a second after the key press, so a paste made sooner gets Teams' plain copy. Every press is logged to `teams-supercopy.log` next to the installed script.
+Paste only after the dark notice: the special copy lands about a second after the key press, so a paste made sooner gets Teams' plain copy. Every press is logged (tray menu, Open log).
 
 ## Browser extension
 
@@ -134,149 +134,88 @@ Chrome validation on 2026-11-07 through Playwriter:
 - Edge installation and real destination apps remain untested. Rich image import depends on the destination's paste behavior.
 - Teams' own Copy menu is covered by DOM tests only. Live menu activation was blocked by overlapping controls; ordinary selected-text copy was tested on real Teams.
 
-## Native Windows requirements
+## Windows app
 
-- Windows 10 or 11
+One file, `TeamsSupercopy.exe`: a tray icon with the listener inside. Nothing else to install: it runs on the .NET Framework 4.8 that Windows 10 and 11 already have.
+
+- Windows 10 or 11, x64
 - New Microsoft Teams (process `ms-teams.exe`). Classic Teams is not supported.
-- PowerShell 7 (`pwsh`). Windows PowerShell 5.1 is not tested.
+- No admin rights, no Graph API, no tenant consent: everything runs locally for the current user.
+
+### Download
+
+From the [products page](https://servizi.everbright.it/prodotti/) (Teams Supercopy card, then the installer or the portable ZIP), or from the [latest release](https://github.com/Aptul9/Teams-Supercopy/releases/latest):
+
+| Download | What it does |
+|---|---|
+| [TeamsSupercopy-Windows-x64-Setup.exe](https://servizi.everbright.it/download/TeamsSupercopy-Windows-x64-Setup.exe) | per-user installer: program in `%LOCALAPPDATA%\Programs\Teams Supercopy`, **Teams Supercopy** in the Start menu, uninstall from Settings > Apps. One page asks whether it starts with Windows. |
+| [TeamsSupercopy-Windows-x64.zip](https://servizi.everbright.it/download/TeamsSupercopy-Windows-x64.zip) | portable: the exe alone, to put in any folder and double-click |
+
+The installer, a portable copy started for the first time, or a second launch show where it is: a notice next to the clock. The icon is in the notification area; Windows 11 may put it under the `^` arrow, from where it can be dragged onto the taskbar.
+
+Installing or starting 1.1 removes the PowerShell version (up to 1.0.5): it stops the old listener, deletes `%LOCALAPPDATA%\Programs\TeamsSupercopy` and its `Teams Supercopy.lnk` in the Startup folder.
+
+### Tray menu
+
+Left or right click opens the menu, which stays open until the icon is clicked again (or Esc).
+
+| Item | Does |
+|---|---|
+| Enabled | untick to turn Supercopy off without exiting: Ctrl+C and the shortcuts reach Teams untouched. Kept in `HKCU\Software\TeamsSupercopy` (`Disabled`), so it stays off after a restart. |
+| Start with Windows | the `TeamsSupercopy` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pointing at this exe |
+| Open log | `%LOCALAPPDATA%\TeamsSupercopy\teams-supercopy.log`: every copy, every skipped copy with its reason, and why the listener stopped if it did |
+| Restart | restarts the listener |
+| Exit | ends the app |
+
+The listener runs on its own thread. If it stops on an error, the app starts it again after 2 seconds, five times a minute at most, then shows a notice.
+
+Command line, used by the installer: `--close-running` (closes a running copy, exit 1 if one is still running after 10 s), `--install-settings --startup on|off`, `--uninstall-cleanup`, `--startup` (started at sign-in: no notice).
+
+### Build and release
+
+`windows/` holds the app, built like EverTranscript Windows: the C# compiler of .NET Framework 4 (`csc.exe`, C# 5), an Inno Setup 6 installer from the tested ZIP.
 
 ```powershell
-winget install Microsoft.PowerShell
+cd windows
+./build.ps1 -Test                                       # bin\TeamsSupercopy.exe and the regressions (tests\SupercopyTests.cs, real clipboard)
+./tools/package.ps1                                     # artifacts\release\TeamsSupercopy-Windows-x64.zip + .json
+./tools/test-package.ps1 -Archive ./artifacts/release/TeamsSupercopy-Windows-x64.zip
+./tools/installer.ps1                                   # TeamsSupercopy-Windows-x64-Setup.exe, "setup" added to the JSON
+./tools/test-installer.ps1 -Setup ./artifacts/release/TeamsSupercopy-Windows-x64-Setup.exe
 ```
 
-No admin rights, no Graph API, no tenant consent: everything runs locally for the current user.
+The package and installer tests refuse to run while Teams Supercopy is running: exit it from the tray first.
 
-## Install
-
-Download [TeamsSupercopy-Windows.zip](https://servizi.everbright.it/download/TeamsSupercopy-Windows.zip), also linked from the [products page](https://servizi.everbright.it/prodotti/) with its version. Extract it to any folder, then in PowerShell 7 from that folder:
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-The extracted folder is not needed afterwards. From a clone of this repository the same command works from the repository root:
-
-```powershell
-git clone https://github.com/Aptul9/Teams-Supercopy.git
-cd Teams-Supercopy
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-`install.ps1`:
-
-1. stops a running Teams Supercopy tray app and listener, if any
-2. copies `TeamsSupercopy.exe`, `teams-supercopy.ps1` and `assets\icon.ico` to `%LOCALAPPDATA%\Programs\TeamsSupercopy\`
-3. creates `Teams Supercopy.lnk` in the user Startup folder (`shell:startup`), pointing to `TeamsSupercopy.exe`, so it starts at every login
-4. starts `TeamsSupercopy.exe` now
-
-`TeamsSupercopy.exe` is a tray icon. It runs `teams-supercopy.ps1` through `pwsh` with no console window, starts it again if it stops (up to five times a minute), and ends it on exit. Left or right click opens its menu, which stays open until the icon is clicked again (or Esc). The menu has Enabled (untick to turn Supercopy off without exiting; remembered in `HKCU\Software\TeamsSupercopy`), Start with Windows (adds or removes the Startup shortcut), Open log, Restart and Exit. No window to close by mistake: on Windows 11 Windows Terminal ignores `-WindowStyle Hidden`, so a listener started as `pwsh -WindowStyle Hidden` shows a terminal window and dies when that window is closed. The exe is built from `tray/TeamsSupercopy.cs` by `tools/package-windows.ps1` with the .NET Framework 4 `csc.exe` included in Windows; it is not in the repository.
-
-It prints the installed version and paths and whether the listener is running. Re-running it, from a newer download or clone, updates the installed copy.
-
-Options: `-InstallDir <path>`, `-StartupDir <path>`, `-NoStart`.
-
-## Windows download release
-
-`.github/workflows/windows-download.yml` builds and publishes the ZIP; nothing is uploaded by hand.
-
-- The version is `$SupercopyVersion` in `teams-supercopy.ps1`, the only place it is written. The listener logs it at startup (`listener ready v1.0.0`). Raise it in the pull request that changes the listener.
-- A pull request or a push to `main` that touches the native files (`teams-supercopy.ps1`, `tray/TeamsSupercopy.cs`, `install.ps1`, `uninstall.ps1`, `assets/icon.ico`, `README.md`, `tests/clipboard.Tests.ps1`, the two `tools/*-windows*.ps1` scripts or the workflow) runs the clipboard tests on `windows-latest`, builds `TeamsSupercopy-Windows.zip` and `TeamsSupercopy-Windows.json` with `tools/package-windows.ps1`, then `tools/test-windows-package.ps1` extracts the ZIP, checks it against its manifest and JSON, installs it into temporary folders, starts the tray app through the Startup shortcut, checks the listener has no console and is restarted after being killed, and uninstalls it.
-- On a push to `main` only, the job `servizi` uploads the tested ZIP, then the JSON `{version, sha256, bytes, commit, file}`, to `https://servizi.everbright.it/download/` through the restricted SSH key of this repository. The products page reads the JSON for the link and the version line.
-- Repository secrets: `SERVIZI_HOST`, `SERVIZI_KNOWN_HOSTS`, `SERVIZI_DOWNLOAD_SSH_KEY`.
+- The version is `AssemblyVersion` in `windows/src/App.cs`, the only place it is written. Raise it in the pull request that changes the app.
+- `.github/workflows/windows.yml` runs the steps above on `windows-2022` for every pull request and push to `main` that touches `windows/`, the icon or the workflow.
+- On a push to `main` it also creates the GitHub release `windows-v<version>-build.<run>.<attempt>` and uploads ZIP, installer and then the JSON `{version, sha256, bytes, commit, file, setup}` to `https://servizi.everbright.it/download/` through the restricted SSH key of this repository (secrets `SERVIZI_HOST`, `SERVIZI_KNOWN_HOSTS`, `SERVIZI_DOWNLOAD_SSH_KEY`). The products page reads that JSON for the popup.
 - The Chrome extension release is separate and unaffected.
 
-Local build and test (the test refuses to run while a listener is running, since install and uninstall stop it):
+### Verify on a real Teams
 
-```powershell
-pwsh -NoProfile -STA -File tests/clipboard.Tests.ps1
-pwsh -NoProfile -File tools/package-windows.ps1 -OutputDirectory "$env:TEMP\supercopy-release"
-pwsh -NoProfile -File tools/test-windows-package.ps1 -Archive "$env:TEMP\supercopy-release\TeamsSupercopy-Windows.zip"
-```
-
-## Start at login without the installer
-
-The listener is the script run with no arguments; `TeamsSupercopy.exe` runs the `teams-supercopy.ps1` in its own folder. To start it at login by hand, put both in one folder and create the Startup shortcut:
-
-```powershell
-$exe = "$env:LOCALAPPDATA\Programs\TeamsSupercopy\TeamsSupercopy.exe"   # wherever the exe and script are
-$lnk = Join-Path ([Environment]::GetFolderPath('Startup')) 'Teams Supercopy.lnk'
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-$s.TargetPath = $exe
-$s.WorkingDirectory = Split-Path $exe
-$s.Save()
-```
-
-Start it now without logging out:
-
-```powershell
-Start-Process "$env:LOCALAPPDATA\Programs\TeamsSupercopy\TeamsSupercopy.exe"
-```
-
-## Verify
-
-Clipboard regression checks (Windows, restores the original clipboard afterward):
-
-```powershell
-pwsh -NoProfile -STA -File tests/clipboard.Tests.ps1
-```
-
-Listener running:
-
-```powershell
-Get-CimInstance Win32_Process -Filter "Name='pwsh.exe'" | Where-Object CommandLine -match 'teams-supercopy\.ps1' | Select-Object ProcessId, CommandLine
-```
-
-Reading Teams works (open a chat in Teams first; this prints instead of touching the clipboard):
-
-```powershell
-pwsh -NoProfile -File "$env:LOCALAPPDATA\Programs\TeamsSupercopy\teams-supercopy.ps1" -Once All -Stdout
-```
-
-The output must list the messages of the open chat with author and time. Then the real test: select a few messages in Teams, press `Ctrl+Alt+C`, paste.
-
-Check automatic enrichment and bypasses with the same selected message:
-
-1. Press `Ctrl+C` in native Teams. The pasted copy must include the chat header, author and timestamp.
-2. Press `Ctrl+Shift+C`, then release the keys. The pasted copy must remain the original selected text.
-3. Hold Shift while choosing Copy from the context menu. The pasted copy must remain the original selected text.
-4. Copy matching text from EverTranscript or another browser tab. Supercopy must leave that copy unchanged.
-
-One-shot modes, also usable from other tools or agents:
-
-| Command | Output |
-|---|---|
-| `-Once All` | every loaded message of the open chat |
-| `-Once Hover` | the message under the mouse |
-| `-Once Selection` | the messages matching the text already on the clipboard |
-| add `-Stdout` | print instead of writing the clipboard |
-
-Errors raised while handling a hotkey go to `teams-supercopy.log` next to the installed script, with a Windows "hand" error sound. When the listener stops, the reason goes there too (`listener stopped: ...`); the tray menu opens the log.
-
-## Uninstall
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
-```
-
-Stops the tray app and the listener, deletes the Startup shortcut and the installed folder.
+1. Select a few messages in Teams, press `Ctrl+C`, paste: chat header, author and time must be there.
+2. `Ctrl+Shift+C`, then release the keys: the paste is the original selected text.
+3. Hold Shift while choosing Copy from the context menu: the paste is the original selected text.
+4. Copy matching text from EverTranscript or another browser tab: Supercopy leaves it unchanged.
+5. `Ctrl+Alt+C` with nothing selected: the message under the mouse. `Ctrl+Alt+Shift+C`: the whole loaded chat.
 
 ## How it works
 
 - Teams is a WebView2 app. Its UI Automation tree (the accessibility data used by screen readers) carries, for every message, `author-<id>`, `content-<id>` and `message-body-<id>`. These are only in the **raw** view of the tree, not in the default control view.
 - `<id>` is the message arrival time in epoch milliseconds, so the time is read from the id, independent of the UI language.
 - A quote shows up inside `content-<id>` as `Inizio citazione, <author>, <date>, <text>, fine citazione` (Italian UI), optionally followed by `, Questo messaggio citato non è verificato da Teams`. A message can hold several, anywhere in its text.
-- An image is an `Image` element under `content-<id>` whose AutomationId is `x_<objectId>` (for example `x_0-weu-d14-<32 hex>`). The tree has no pixels, but Teams downloads the image through its WebView2, so the full file is in the Chromium HTTP cache (`EBWebView\*\Cache\Cache_Data`, blockfile format) under the key `.../objects/<objectId>/views/imgo`. The script reads it from there: no network call, no token. If the entry is missing, it falls back to a screen capture of the thumbnail, marked `screen thumbnail` in the text.
-- On `Ctrl+Alt+C` the script waits for Ctrl, Alt and Shift to be released, then sends a plain `Ctrl+C`. Sending it with Shift still down would reach Teams as `Ctrl+Shift+C`, which starts an audio call.
+- An image is an `Image` element under `content-<id>` whose AutomationId is `x_<objectId>` (for example `x_0-weu-d14-<32 hex>`). The tree has no pixels, but Teams downloads the image through its WebView2, so the full file is in the Chromium HTTP cache (`EBWebView\*\Cache\Cache_Data`, blockfile format) under the key `.../objects/<objectId>/views/imgo`. The app reads it from there: no network call, no token. If the entry is missing, it falls back to a screen capture of the thumbnail, marked `screen thumbnail` in the text.
+- On `Ctrl+Alt+C` the app waits for Ctrl, Alt and Shift to be released, then sends a plain `Ctrl+C`. Sending it with Shift still down would reach Teams as `Ctrl+Shift+C`, which starts an audio call.
 - The copied text is matched line by line, in order, against the messages in the tree. Matching lines rather than whole blocks works because Teams copies a quoted block as `Author` plus text without the date.
 - If the clipboard does not change (nothing selected), the message under the cursor is found by bounding rectangle. `AutomationElement.FromPoint` returns the whole message pane on WebView2, not the bubble.
 
 ## Limits
 
 - Only messages Teams has rendered are visible. Scroll up to load older ones before copying.
-- Tested on the Italian Teams UI, Teams build `26260.1717`. The quote markers for other UI languages (`Begin quote` / `end quote` are in the pattern) are not verified. If quotes do not come out, dump the tree with `-Once All -Stdout` and adjust `$QuoteRx` in the script.
+- Tested on the Italian Teams UI. The quote markers for other UI languages (`Begin quote` / `end quote` are in the pattern) are not verified; the pattern is `QuoteRx` in `windows/src/Copy.cs`.
 - It depends on the current Teams DOM ids. A Teams update that renames them breaks it.
 - A partially selected message is copied whole.
 - An image comes out at full size only if Teams has downloaded it, which happens when it is shown in the chat. An image that is neither in the cache nor on screen is reported as `[image N: not available]`.
 - Files, cards and GIF stickers are not extracted; only images posted in the message.
 - Paste checked on claude.ai in Chrome (text plus image attachments) and Word (text with the images inline). Other apps may take only the plain text, in which case the images are reachable through the paths in the text.
-- The listener uses the mutex `Local\TeamsCopyHotkeys`: a second copy started while one is running exits silently.
+- One copy runs at a time (mutex `Local\TeamsSupercopy`): a second launch only shows where the running one is.
